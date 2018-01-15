@@ -7,6 +7,7 @@ SCOOP_SIZE = 64
 NUM_SCOOPS = 4096
 NONCE_SIZE = NUM_SCOOPS * SCOOP_SIZE
 MAX_READ = 4 * NONCE_SIZE
+MB = 1024 * 1024
 
 
 # Create own semaphore class which is much faster than the original version in the
@@ -67,29 +68,69 @@ def addPlotFile(pathName):
         raise
 
 
+def plotNonces(startnonce, nonces):
+    cmdLine = [ plotterPathName, "-k", str(key), "-d", tmpDirName, "-t", str(threads), "-x", plotCore,
+                "-s", str(startnonce), "-n", str(nonces) ]
+    print(BRIGHTGREEN + f"Compute {nonces} missing nonces through running:")
+    print("  " + " ".join(cmdLine))
+    if bDryRun :
+        return None
+    prc = subprocess.run(cmdLine, stdout = subprocess.PIPE, stderr = subprocess.PIPE)
+    print(BRIGHTGREEN + prc.stdout.decode("utf-8"))
+    print(BRIGHTRED + prc.stderr.decode("utf-8") + RESET_ALL)
+    if prc.returncode :
+        print(BRIGHTRED + f"Error: Plotter returned with error code {prc.returncode}!" + RESET_ALL)
+        sys.exit(1)
+    return os.path.join(outDirName, f"{key}_{startnonce}_{nonces}_{nonces}")
+
+
 def readerThread(buf, sem, lock):
     try:
-        for startnonce in startnonces:
-            pathName, skip = plotInfos[startnonce]
-            nonces, stagger = plotFiles[pathName]
-            groupCnt = nonces // stagger
-            groupSize = stagger * NONCE_SIZE
-            groupScoopSize = stagger * SCOOP_SIZE
-            with open(pathName, "rb") as I:
-                for scoop in range(NUM_SCOOPS):
-                    scoops2Read = (nonces if skip <= 0 else nonces - skip) * SCOOP_SIZE
-                    for group in range(groupCnt):
-                        I.seek(group * groupSize + scoop * groupScoopSize)
-                        size = reading = min(groupScoopSize, scoops2Read)
-                        while size > 0:
-                            buf.append(I.read(size if size < MAX_READ else MAX_READ))
-                            if lock.locked():
-                                lock.release()
-                            sem.acquire()
-                            size -= MAX_READ
-                        scoops2Read -= reading
+        refPlot = "/media/martin/Daten8T/test/ref/213183720534513520_0_8192_8192"
+        with open(refPlot, "rb") as R:
+            for scoop in range(NUM_SCOOPS):
+                print(BRIGHTYELLOW + f"\nReading scoop {scoop}..." + RESET_ALL)
+                for nr, startnonce in enumerate(startnonces):
+                    pathName, skip = plotInfos[startnonce]
+                    nonces, stagger = plotFiles[pathName]
+                    print(BRIGHTBLUE + f"{nr + 1}/{len(startnonces)} Reading {pathName}..." + RESET_ALL)
+                    if skip > 0:
+                        print(BRIGHTGREEN + f"Skipping last {skip} nonces!" + RESET_ALL)
+                    groupCnt = nonces // stagger
+                    groupSize = stagger * NONCE_SIZE
+                    groupScoopSize = stagger * SCOOP_SIZE
+                    with open(pathName, "rb") as I:
+                        bytes2Read = (nonces if skip <= 0 else nonces - skip) * SCOOP_SIZE
+                        for group in range(groupCnt):
+                            print("POS", group * groupSize + scoop * groupScoopSize)
+                            I.seek(group * groupSize + scoop * groupScoopSize)
+                            size = reading = min(groupScoopSize, bytes2Read)
+                            print(scoop, startnonce, group, "#", group * groupSize + scoop * groupScoopSize, size)
+                            while reading > 0:
+                                if bStop:
+                                    raise StopIteration("Cancelled by user")
+                                data = I.read(min(reading, MAX_READ))
+                                print("READ", "%08X" % R.tell(), min(reading, MAX_READ), len(data))
+                                refData = R.read(len(data))
+                                if data != refData:
+                                    print(len(data), len(refData))
+                                    for i in range(len(data)):
+                                        if data[i] != refData[i]:
+                                            print("!!!", i)
+                                            break
+                                    raise Exception("FAILED")
+                                buf.append(data)
+                                if lock.locked():
+                                    lock.release()
+                                sem.acquire()
+                                reading -= MAX_READ
+                            bytes2Read -= size
+                #time.sleep(1.0)
     except Exception as exc:
-        print(exc)
+        print(BRIGHTRED + str(exc) + RESET_ALL)
+    buf.append(None)
+    if lock.locked() :
+        lock.release()
 
 
 if __name__ == "__main__":
@@ -110,7 +151,8 @@ if __name__ == "__main__":
         BRIGHTRED = BRIGHTGREEN = BRIGHTBLUE = BRIGHTYELLOW = RESET_ALL = ""
     if len(sys.argv) < 2:
         print(BRIGHTGREEN + "BURST plots merger (version 1.0)")
-        print(BRIGHTBLUE + "Usage: %s [-p PlotterPath] [-x PlotCore] [-r] [-d] [-o OUTDIR] INPATH1 INPATH2 ..." % sys.argv[0])
+        print(BRIGHTBLUE + "Usage: %s [-p PlotterPath] [-x PlotCore] [-r] [-d] [-o OUTDIR] [-t TMPDIR] INPATH1 INPATH2 ..."
+              % sys.argv[0])
         print("-r = Remove old files after successfull merge.")
         print("-d = Dry run.")
         print(BRIGHTGREEN + "If OUTDIR is missing then the optimized plot is written to the same directory " 
@@ -121,6 +163,7 @@ if __name__ == "__main__":
     plotterPathName = None
     plotCore = None
     outDirName = None
+    tmpDirName = None
     bRemoveOld = False
     bDryRun = False
     plotFiles = {}  # [path] = ( nonces, stagger ) -> information about plotfiles
@@ -140,6 +183,12 @@ if __name__ == "__main__":
             continue
         if outDirName == "-o":
             outDirName = arg
+            continue
+        if arg == "-t":
+            tmpDirName = arg
+            continue
+        if tmpDirName == "-t":
+            tmpDirName = arg
             continue
         if arg == "-p":
             plotterPathName = arg
@@ -183,6 +232,8 @@ if __name__ == "__main__":
                 sys.exit(1)
     if plotCore is None:
         plotCore = "0"
+    if tmpDirName in ( None, "-t" ):
+        tmpDirName = os.path.dirname(list(plotFiles.keys())[0])
     # Check for overlapping files and missing nonces
     startnonces = sorted(plotInfos)
     totalnonces = 0
@@ -207,6 +258,37 @@ if __name__ == "__main__":
                 print(BRIGHTRED + "Error: Path to plotter not set!" + RESET_ALL)
                 sys.exit(1)
             print(BRIGHTGREEN + f"Missing {-skip} nonces will be created." + RESET_ALL)
+    # Plot missing nonces
+    threads = os.cpu_count() // 2
+    threads8 = threads * 8
+    if bCreateMissing:
+        # Compute missing nonces
+        for startnonce in startnonces:
+            pathName, skip = plotInfos[startnonce]
+            nonces = plotFiles[pathName][0]
+            if skip >= 0:
+                continue
+            missingNonces = -skip
+            if missingNonces < threads8:
+                threads = max((missingNonces + 7) // 8, 1)
+                missingNonces = threads * 8
+            elif missingNonces % (threads8):
+                missingNonces = ((missingNonces // threads8) + 1) * threads8
+            newstartnonce = startnonce + nonces
+            pathName = plotNonces(newstartnonce, missingNonces)
+            if pathName:
+                plotFiles[pathName] = ( missingNonces, missingNonces )
+                plotInfos[newstartnonce] = [ pathName, missingNonces + skip ]
+        startnonces = sorted(plotInfos)
+    if totalnonces % threads8:
+        plotInfos[startnonces[-1]][1] = totalnonces % threads8
+        newstartnonce = (totalnonces // threads8) * threads8
+        totalnonces = newstartnonce + threads8
+        pathName = plotNonces(newstartnonce, threads8)
+        if pathName:
+            plotFiles[pathName] = ( threads8, threads8 )
+            plotInfos[newstartnonce] = [ pathName, 0 ]
+    startnonces = sorted(plotInfos)
     outPathName = os.path.join(outDirName, f"{key}_{startnonces[0]}_{totalnonces}_{totalnonces}")
     outSize = totalnonces * NONCE_SIZE
     print(BRIGHTYELLOW + f"Merging {len(plotInfos)} plot files:")
@@ -215,39 +297,12 @@ if __name__ == "__main__":
     print(f"Destination file {outPathName} will have:")
     print(f"  Start Nonce: {startnonces[0]}")
     print(f"  Nonces:      {totalnonces}")
-    print(f"  File size:   {outSize // 1024 // 1024 // 1024} GB")
-    if bCreateMissing:
-        # Compute missing nonces
-        for startnonce in startnonces:
-            pathName, skip = plotInfos[startnonce]
-            nonces = plotFiles[pathName][0]
-            if skip >= 0:
-                continue
-            nonces = -skip
-            threads = os.cpu_count() // 2
-            if nonces < threads * 8:
-                threads = max((nonces + 7) // 8, 1)
-                nonces = threads * 8
-            cmdLine = [ plotterPathName, "-k", str(key), "-d", outDirName, "-t", str(threads), "-x", plotCore,
-                        "-s", str(startnonce), "-n", str(nonces) ]
-            print(BRIGHTGREEN + f"Compute {nonces} missing nonces through running:")
-            print("  " + " ".join(cmdLine))
-            if bDryRun:
-                continue
-            prc = subprocess.run(cmdLine, stdout = subprocess.PIPE, stderr = subprocess.PIPE)
-            print(BRIGHTGREEN + prc.stdout.decode("utf-8"))
-            print(BRIGHTRED + prc.stderr.decode("utf-8") + RESET_ALL)
-            if prc.returncode:
-                print(BRIGHTRED + f"Error: Plotter returned with error code {prc.returncode}!" + RESET_ALL)
-                sys.exit(1)
-            pathName = f"{key}_{startnonce}_{nonces}_{nonces}"
-            plotFiles[pathName] = ( nonces, nonces )
-            plotInfos[startnonce] = [ pathName, 0 ]
-        startnonces = sorted(plotInfos)
-    if os.path.exists(outPathName):
-        print(BRIGHTRED + f"Warning: Destination file {outPathName} already exists! Removing it!" + RESET_ALL)
-        if not bDryRun:
-            os.remove(outPathName)
+    print(f"  File size:   {outSize // 1024 // MB} GB")
+    for pathName in  ( outPathName + ".merging", outPathName + ".merged" ):
+        if os.path.exists(pathName):
+            print(BRIGHTRED + f"Warning: Destination file {pathName} already exists! Removing it!" + RESET_ALL)
+            if not bDryRun:
+                os.remove(pathName)
     if diskFree(outDirName) < outSize:
         print(BRIGHTRED + "Error: Not enough free space on disk for merged plot file!" + RESET_ALL)
         sys.exit(1)
@@ -255,6 +310,7 @@ if __name__ == "__main__":
     if bDryRun:
         print(BRIGHTBLUE + "Skip merging plot files because of dry run option.")
         sys.exit(0)
+    bStop = False
     buf = deque()
     sem = Semaphore(1000)
     lock = _thread.allocate_lock()
@@ -266,19 +322,27 @@ if __name__ == "__main__":
         while thrReader.is_alive() or buf:
             try:
                 data = buf.popleft()
+                if data is None:
+                    break
                 O.write(data)
                 sem.release()
                 cnt += 1
                 written += len(data)
                 if cnt >= 1000:
                     t2 = time.time()
-                    print("%.1f%% written. %d MB/s. " % (100 * written / outSize, (written - lastWritten) / (t2 - t1)),
+                    print("%.1f%% written. %d MB/s. " % (100 * written / outSize, (written - lastWritten) // MB / (t2 - t1)),
                           end = "\r")
                     cnt = 0
                     lastWritten = written
                     t1 = t2
+            except KeyboardInterrupt:
+                bStop = True
             except:
                 lock.acquire()
+    if bStop:
+        print(BRIGHTRED + "\nCancelled by user")
+        sys.exit(1)
+    os.rename(outPathName + ".merging", outPathName + ".merged")
     if bRemoveOld:
         print(BRIGHTBLUE + "Removing old plot files...")
         for pathName in plotFiles:
