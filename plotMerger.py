@@ -60,7 +60,7 @@ def addPlotFile(pathName):
             print(BRIGHTRED + msg + RESET_ALL)
             raise Exception(msg)
         plotFiles[pathName] = ( nonces, stagger )
-        plotInfos[startnonce] = [ pathName, nonces, 0 ]
+        plotInfos[startnonce] = [ pathName, 0 ]
         return key
     except Exception as exc:
         print(BRIGHTRED + f"Warning: Ignoring invalid source filename: {exc}" + RESET_ALL)
@@ -70,23 +70,24 @@ def addPlotFile(pathName):
 def readerThread(buf, sem, lock):
     try:
         for startnonce in startnonces:
-            pathName, nonces2Read, _ = plotInfos[startnonce]
-            # TODO: Consider case nonces2Read < nonces -> Skip last (overlapping) nonces
+            pathName, skip = plotInfos[startnonce]
             nonces, stagger = plotFiles[pathName]
             groupCnt = nonces // stagger
             groupSize = stagger * NONCE_SIZE
             groupScoopSize = stagger * SCOOP_SIZE
             with open(pathName, "rb") as I:
                 for scoop in range(NUM_SCOOPS):
+                    scoops2Read = (nonces if skip <= 0 else nonces - skip) * SCOOP_SIZE
                     for group in range(groupCnt):
                         I.seek(group * groupSize + scoop * groupScoopSize)
-                        size = groupScoopSize
+                        size = reading = min(groupScoopSize, scoops2Read)
                         while size > 0:
                             buf.append(I.read(size if size < MAX_READ else MAX_READ))
                             if lock.locked():
                                 lock.release()
                             sem.acquire()
                             size -= MAX_READ
+                        scoops2Read -= reading
     except Exception as exc:
         print(exc)
 
@@ -113,7 +114,7 @@ if __name__ == "__main__":
         print("-d = Delete old files after successfull merge.")
         print(BRIGHTGREEN + "If OUTDIR is missing then the optimized plot is written to the same directory " 
               "as the source plots.")
-        print("Unoptimized plots are optimized." + RESET_ALL)
+        print("Unoptimized plots are also accepted as source files." + RESET_ALL)
         sys.exit(1)
     # Read arguments
     plotterPathName = None
@@ -121,8 +122,9 @@ if __name__ == "__main__":
     outDirName = None
     bDeleteOld = False
     plotFiles = {}  # [path] = ( nonces, stagger ) -> information about plotfiles
-    plotInfos = {}  # [startnonce] = [ path, nonces_to_read, hole_size ]
-                    #   -> nonces to read from file (<nonces in case of overlapping files)
+    plotInfos = {}  # [startnonce] = [ path, skip ]
+                    #   -> skip > 0 --> Overlapping plot files. Nonces to skip.
+                    #   -> skip < 0 --> Missing nonces. Will be computed/plotted.
     key = None
     for arg in sys.argv[1:]:
         if arg == "-d":
@@ -181,20 +183,19 @@ if __name__ == "__main__":
     totalnonces = 0
     bCreateMissing = False
     for nr, startnonce in enumerate(startnonces):
-        pathName, nonces, _ = plotInfos[startnonce]
+        pathName = plotInfos[startnonce][0]
+        nonces = plotFiles[pathName][0]
         totalnonces += nonces
         if (nr == 0) and outDirName in ( None, "-o" ):
             outDirName = os.path.dirname(pathName)
         if nr + 1 >= len(startnonces):
             continue
-        skip = startnonce + nonces - startnonces[nr + 1]
+        skip = plotInfos[startnonce][1] = startnonce + nonces - startnonces[nr + 1]
         totalnonces -= skip
         if skip > 0:
-            plotInfos[ startnonce ][1] -= skip
             print(BRIGHTYELLOW + f"Info: Overlapping files\n {pathName}\n and\n {plotInfos[startnonces[nr + 1][0]]}!")
             print(BRIGHTGREEN + f"Skipping last {skip} nonces in {pathName}!" + RESET_ALL)
         elif skip < 0:
-            plotInfos[startnonce][2] = -skip
             bCreateMissing = True
             print(BRIGHTYELLOW + f"Info: Missing {-skip} nonces between\n {pathName}\n and\n {plotInfos[startnonces[nr + 1]][0]}!")
             if plotterPathName is None:
@@ -213,11 +214,12 @@ if __name__ == "__main__":
     if bCreateMissing:
         # Compute missing nonces
         for startnonce in startnonces:
-            pathName, nonces, holeSize = plotInfos[startnonce]
-            if holeSize <= 0:
+            pathName, skip = plotInfos[startnonce]
+            nonces = plotFiles[pathName][0]
+            if skip >= 0:
                 continue
             cmdLine = [ plotterPathName, "-k", str(key), "-d", outDirName, "-t", str(os.cpu_count()), "-x", plotCore,
-                        "-s", str(startnonce), "-n", str(holeSize) ]
+                        "-s", str(startnonce), "-n", str(-skip) ]
             print(BRIGHTGREEN + f"Compute {holeSize} missing nonces through running:")
             print("  " + "".join(cmdLine))
             prc = subprocess.run(cmdLine, stdout = subprocess.PIPE, stderr = subprocess.PIPE)
@@ -227,8 +229,8 @@ if __name__ == "__main__":
                 print(BRIGHTRED + f"Error: Plotter returned with error code {prc.returncode}!" + RESET_ALL)
                 sys.exit(1)
             pathName = f"{key}_{startnonce}_{holeSize}_{holeSize}"
-            plotFiles[pathName] = ( holeSize, holeSize )
-            plotInfos[startnonce] = [ pathName, holeSize, 0 ]
+            plotFiles[pathName] = ( -skip, -skip )
+            plotInfos[startnonce] = [ pathName, 0 ]
         startnonces = sorted(plotInfos)
     if os.path.exists(outPathName):
         print(BRIGHTRED + f"Warning: Destination file {outPathName} already exists! Removing it!" + RESET_ALL)
