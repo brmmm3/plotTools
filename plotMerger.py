@@ -110,8 +110,9 @@ if __name__ == "__main__":
         BRIGHTRED = BRIGHTGREEN = BRIGHTBLUE = BRIGHTYELLOW = RESET_ALL = ""
     if len(sys.argv) < 2:
         print(BRIGHTGREEN + "BURST plots merger (version 1.0)")
-        print(BRIGHTBLUE + "Usage: %s [-p PlotterPath] [-x PlotCore] [-d] [-o OUTDIR] INPATH1 INPATH2 ..." % sys.argv[0])
-        print("-d = Delete old files after successfull merge.")
+        print(BRIGHTBLUE + "Usage: %s [-p PlotterPath] [-x PlotCore] [-r] [-d] [-o OUTDIR] INPATH1 INPATH2 ..." % sys.argv[0])
+        print("-r = Remove old files after successfull merge.")
+        print("-d = Dry run.")
         print(BRIGHTGREEN + "If OUTDIR is missing then the optimized plot is written to the same directory " 
               "as the source plots.")
         print("Unoptimized plots are also accepted as source files." + RESET_ALL)
@@ -120,15 +121,19 @@ if __name__ == "__main__":
     plotterPathName = None
     plotCore = None
     outDirName = None
-    bDeleteOld = False
+    bRemoveOld = False
+    bDryRun = False
     plotFiles = {}  # [path] = ( nonces, stagger ) -> information about plotfiles
     plotInfos = {}  # [startnonce] = [ path, skip ]
                     #   -> skip > 0 --> Overlapping plot files. Nonces to skip.
                     #   -> skip < 0 --> Missing nonces. Will be computed/plotted.
     key = None
     for arg in sys.argv[1:]:
+        if arg == "-r":
+            bRemoveOld = True
+            continue
         if arg == "-d":
-            bDeleteOld = True
+            bDryrun = True
             continue
         if arg == "-o":
             outDirName = arg
@@ -222,6 +227,8 @@ if __name__ == "__main__":
                         "-s", str(startnonce), "-n", str(-skip) ]
             print(BRIGHTGREEN + f"Compute {holeSize} missing nonces through running:")
             print("  " + "".join(cmdLine))
+            if bDryRun:
+                continue
             prc = subprocess.run(cmdLine, stdout = subprocess.PIPE, stderr = subprocess.PIPE)
             print(prc.stdout)
             print(prc.stderr)
@@ -234,11 +241,15 @@ if __name__ == "__main__":
         startnonces = sorted(plotInfos)
     if os.path.exists(outPathName):
         print(BRIGHTRED + f"Warning: Destination file {outPathName} already exists! Removing it!" + RESET_ALL)
-        os.remove(outPathName)
+        if not bDryRun:
+            os.remove(outPathName)
     if diskFree(outDirName) < outSize:
         print(BRIGHTRED + "Error: Not enough free space on disk for merged plot file!" + RESET_ALL)
         sys.exit(1)
     print(BRIGHTGREEN + f"Writing merged plot to {outPathName}.merging..." + RESET_ALL)
+    if bDryRun:
+        print(BRIGHTBLUE + "Skip merging plot files because of dry run option.")
+        sys.exit(0)
     buf = deque()
     sem = Semaphore(1000)
     lock = _thread.allocate_lock()
@@ -263,4 +274,12 @@ if __name__ == "__main__":
                     t1 = t2
             except:
                 lock.acquire()
+    if bRemoveOld:
+        print(BRIGHTBLUE + "Removing old plot files...")
+        for pathName in plotFiles:
+            try:
+                os.remove(pathName)
+            except Exception as exc:
+                # Windows can be a big pile of shit in some situations. One of them is the file locking...
+                print(BRIGHTRED + f"Error: Failed removing plot file {pathName}:\n{exc}" + RESET_ALL)
     print(BRIGHTGREEN + f"Finished after {int(time.time() - t0)} seconds.")
