@@ -133,7 +133,7 @@ if __name__ == "__main__":
             bRemoveOld = True
             continue
         if arg == "-d":
-            bDryrun = True
+            bDryRun = True
             continue
         if arg == "-o":
             outDirName = arg
@@ -198,7 +198,7 @@ if __name__ == "__main__":
         skip = plotInfos[startnonce][1] = startnonce + nonces - startnonces[nr + 1]
         totalnonces -= skip
         if skip > 0:
-            print(BRIGHTYELLOW + f"Info: Overlapping files\n {pathName}\n and\n {plotInfos[startnonces[nr + 1][0]]}!")
+            print(BRIGHTYELLOW + f"Info: Overlapping files\n {pathName}\n and\n {plotInfos[startnonces[nr + 1]][0]}!")
             print(BRIGHTGREEN + f"Skipping last {skip} nonces in {pathName}!" + RESET_ALL)
         elif skip < 0:
             bCreateMissing = True
@@ -223,20 +223,25 @@ if __name__ == "__main__":
             nonces = plotFiles[pathName][0]
             if skip >= 0:
                 continue
-            cmdLine = [ plotterPathName, "-k", str(key), "-d", outDirName, "-t", str(os.cpu_count()), "-x", plotCore,
-                        "-s", str(startnonce), "-n", str(-skip) ]
-            print(BRIGHTGREEN + f"Compute {holeSize} missing nonces through running:")
-            print("  " + "".join(cmdLine))
+            nonces = -skip
+            threads = os.cpu_count() // 2
+            if nonces < threads * 8:
+                threads = max((nonces + 7) // 8, 1)
+                nonces = threads * 8
+            cmdLine = [ plotterPathName, "-k", str(key), "-d", outDirName, "-t", str(threads), "-x", plotCore,
+                        "-s", str(startnonce), "-n", str(nonces) ]
+            print(BRIGHTGREEN + f"Compute {nonces} missing nonces through running:")
+            print("  " + " ".join(cmdLine))
             if bDryRun:
                 continue
             prc = subprocess.run(cmdLine, stdout = subprocess.PIPE, stderr = subprocess.PIPE)
-            print(prc.stdout)
-            print(prc.stderr)
+            print(BRIGHTGREEN + prc.stdout.decode("utf-8"))
+            print(BRIGHTRED + prc.stderr.decode("utf-8") + RESET_ALL)
             if prc.returncode:
                 print(BRIGHTRED + f"Error: Plotter returned with error code {prc.returncode}!" + RESET_ALL)
                 sys.exit(1)
-            pathName = f"{key}_{startnonce}_{holeSize}_{holeSize}"
-            plotFiles[pathName] = ( -skip, -skip )
+            pathName = f"{key}_{startnonce}_{nonces}_{nonces}"
+            plotFiles[pathName] = ( nonces, nonces )
             plotInfos[startnonce] = [ pathName, 0 ]
         startnonces = sorted(plotInfos)
     if os.path.exists(outPathName):
