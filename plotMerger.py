@@ -81,55 +81,37 @@ def plotNonces(startnonce, nonces):
     if prc.returncode :
         print(BRIGHTRED + f"Error: Plotter returned with error code {prc.returncode}!" + RESET_ALL)
         sys.exit(1)
-    return os.path.join(outDirName, f"{key}_{startnonce}_{nonces}_{nonces}")
+    return os.path.join(tmpDirName, f"{key}_{startnonce}_{nonces}_{nonces}")
 
 
 def readerThread(buf, sem, lock):
     try:
-        refPlot = "/media/martin/Daten8T/test/ref/213183720534513520_0_8192_8192"
-        with open(refPlot, "rb") as R:
-            for scoop in range(NUM_SCOOPS):
-                print(BRIGHTYELLOW + f"\nReading scoop {scoop}..." + RESET_ALL)
-                for nr, startnonce in enumerate(startnonces):
-                    pathName, skip = plotInfos[startnonce]
-                    nonces, stagger = plotFiles[pathName]
-                    print(BRIGHTBLUE + f"{nr + 1}/{len(startnonces)} Reading {pathName}..." + RESET_ALL)
-                    if skip > 0:
-                        print(BRIGHTGREEN + f"Skipping last {skip} nonces!" + RESET_ALL)
-                    groupCnt = nonces // stagger
-                    groupSize = stagger * NONCE_SIZE
-                    groupScoopSize = stagger * SCOOP_SIZE
-                    with open(pathName, "rb") as I:
-                        bytes2Read = (nonces if skip <= 0 else nonces - skip) * SCOOP_SIZE
-                        for group in range(groupCnt):
-                            print("POS", group * groupSize + scoop * groupScoopSize)
-                            I.seek(group * groupSize + scoop * groupScoopSize)
-                            size = reading = min(groupScoopSize, bytes2Read)
-                            print(scoop, startnonce, group, "#", group * groupSize + scoop * groupScoopSize, size)
-                            while reading > 0:
-                                if bStop:
-                                    raise StopIteration("Cancelled by user")
-                                data = I.read(min(reading, MAX_READ))
-                                print("READ", "%08X" % R.tell(), min(reading, MAX_READ), len(data))
-                                refData = R.read(len(data))
-                                if data != refData:
-                                    print(len(data), len(refData))
-                                    for i in range(len(data)):
-                                        if data[i] != refData[i]:
-                                            print("!!!", i)
-                                            break
-                                    raise Exception("FAILED")
-                                buf.append(data)
-                                if lock.locked():
-                                    lock.release()
-                                sem.acquire()
-                                reading -= MAX_READ
-                            bytes2Read -= size
-                #time.sleep(1.0)
+        for scoop in range(NUM_SCOOPS):
+            for nr, startnonce in enumerate(startnonces):
+                pathName, skip = plotInfos[startnonce]
+                nonces, stagger = plotFiles[pathName]
+                groupCnt = nonces // stagger
+                groupSize = stagger * NONCE_SIZE
+                groupScoopSize = stagger * SCOOP_SIZE
+                with open(pathName, "rb") as I:
+                    bytes2Read = (nonces if skip <= 0 else nonces - skip) * SCOOP_SIZE
+                    for group in range(groupCnt):
+                        I.seek(group * groupSize + scoop * groupScoopSize)
+                        size = reading = min(groupScoopSize, bytes2Read)
+                        while reading > 0:
+                            if bStop:
+                                raise StopIteration("Cancelled by user")
+                            data = I.read(min(reading, MAX_READ))
+                            buf.append(data)
+                            if lock.locked():
+                                lock.release()
+                            sem.acquire()
+                            reading -= MAX_READ
+                        bytes2Read -= size
     except Exception as exc:
         print(BRIGHTRED + str(exc) + RESET_ALL)
     buf.append(None)
-    if lock.locked() :
+    if lock.locked():
         lock.release()
 
 
@@ -342,7 +324,7 @@ if __name__ == "__main__":
     if bStop:
         print(BRIGHTRED + "\nCancelled by user")
         sys.exit(1)
-    os.rename(outPathName + ".merging", outPathName + ".merged")
+    os.rename(outPathName + ".merging", outPathName)
     if bRemoveOld:
         print(BRIGHTBLUE + "Removing old plot files...")
         for pathName in plotFiles:
