@@ -176,7 +176,7 @@ if __name__ == "__main__":
         print(BRIGHTRED + f"Error: No source plot files to merge!" + RESET_ALL)
         sys.exit(1)
     if plotCore is None:
-        plotCore = "0"
+        plotCore = "2"
     if tmpDirName in ( None, "-t" ):
         tmpDirName = os.path.dirname(list(plotFiles.keys())[0])
     # Check for overlapping files and missing nonces
