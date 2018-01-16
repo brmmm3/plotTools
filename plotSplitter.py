@@ -50,7 +50,7 @@ if __name__ == "__main__":
         BRIGHTRED = BRIGHTGREEN = BRIGHTBLUE = BRIGHTYELLOW = RESET_ALL = ""
     if len(sys.argv) < 2:
         print(BRIGHTGREEN + "BURST plot splitter (version 1.0)")
-        print(BRIGHTBLUE + "Usage: %s [-r] [-t] [-d] [-s size] [-o OUTDIR] INPATH..." % sys.argv[0])
+        print(BRIGHTBLUE + "Usage: %s [-r] [-t] [-d] [-s size] [-o OUTDIR] INPATH" % sys.argv[0])
         print("-r = Remove old files after successfull merge.")
         print("-d = Dry run.")
         print("-t = Truncate plot file instead of splitting it.")
@@ -89,7 +89,7 @@ if __name__ == "__main__":
             splitNonces = arg
             continue
         if splitNonces == "-s":
-            for c, m in ( ( "k", 1024 ), ( "m", MB ), ( "g", 1024 * MB ) ):
+            for c, m in ( ( "k", 1024 ), ( "m", MB ), ( "g", 1024 * MB ), ( "t", MB * MB ) ):
                 if arg.endswith(c) or arg.endswith(c.upper()):
                     splitNonces = max(int(arg[:-1]) * m // NONCE_SIZE, 1)
                     break
@@ -130,7 +130,9 @@ if __name__ == "__main__":
         remNonces -= splitNonces
         if remNonces < splitNonces:
             splitNonces = remNonces
-        if os.path.exists(outPathName) :
+        if bTruncate and len(outFiles):
+            continue
+        if os.path.exists(outPathName):
             print(BRIGHTRED + f"Warning: Destination file {outPathName} already exists! Removing it!" + RESET_ALL)
             if not bDryRun:
                 os.remove(outPathName)
@@ -145,11 +147,15 @@ if __name__ == "__main__":
         thrReader = Thread(target = readerThread, args = ( buf, sem, lock ), daemon = True)
         thrReader.start()
     for nr, outFile in enumerate(outFiles):
+        if bTruncate and nr:
+            continue
         outPathName, _, startNonce, splitNonces, outSize = outFile
         print(f"Destination file(s) {outPathName} will have:")
         print(f"  Nonces:      {splitNonces}")
         print(f"  File size:   {outSize // 1024 // MB} GB")
         outFiles[nr][1] = open(outPathName, "wb")
+    if bDryRun:
+        sys.exit(0)
     t0 = time.time()
     curOutFileNr = 0
     O = outFiles[0][1]
@@ -162,22 +168,20 @@ if __name__ == "__main__":
             if data is None:
                 break
             dataLen = len(data)
-            #print("READ", dataLen / SCOOP_SIZE)
             if dataLen <= blockSize:
-                #print("WRITE1", curOutFileNr, dataLen / SCOOP_SIZE)
-                O.write(data)
+                if not O is None:
+                    O.write(data)
                 blockSize -= dataLen
             else:
-                #print("WRITE2", curOutFileNr, blockSize / SCOOP_SIZE)
-                O.write(data[:blockSize])
+                if not O is None:
+                    O.write(data[:blockSize])
                 blockSize -= dataLen
             while blockSize <= 0:
                 curOutFileNr = (curOutFileNr + 1) % len(outFiles)
                 O = outFiles[curOutFileNr][1]
                 newBlockSize = outFiles[curOutFileNr][3] * SCOOP_SIZE
-                if blockSize < 0:
+                if (blockSize < 0) and not O is None:
                     O.write(data[blockSize:dataLen + blockSize + newBlockSize])
-                    #print("WRITE3", curOutFileNr, len(data[blockSize:dataLen + blockSize + newBlockSize]), blockSize, newBlockSize, -blockSize / SCOOP_SIZE)
                 blockSize += newBlockSize
             sem.release()
             cnt += 1
@@ -195,7 +199,8 @@ if __name__ == "__main__":
         except:
             lock.acquire()
     for outFile in outFiles:
-        outFile[1].close()
+        if not outFile[1] and None:
+            outFile[1].close()
     if bStop:
         print(BRIGHTRED + "\nCancelled by user")
         sys.exit(1)
