@@ -2,75 +2,32 @@
 
 import os
 import _thread
+from util import Semaphore, diskFree, SCOOP_SIZE, NUM_SCOOPS, NONCE_SIZE
 
-SCOOP_SIZE = 64
-NUM_SCOOPS = 4096
-NONCE_SIZE = NUM_SCOOPS * SCOOP_SIZE
 MAX_READ = 4 * NONCE_SIZE
 MB = 1024 * 1024
-
-
-# Create own semaphore class which is much faster than the original version in the
-# threading module.
-class Semaphore(object):
-
-    def __init__(self, value):
-        self._value = value
-        self._value_lock = _thread.allocate_lock()
-        self._zero_lock = _thread.allocate_lock()
-        self._zero_lock.acquire()
-
-    def acquire(self):
-        if self._value < 1:
-            self._zero_lock.acquire()
-        with self._value_lock:
-            self._value -= 1
-
-    def release(self):
-        if self._zero_lock.locked():
-            try:
-                self._zero_lock.release()
-            except:
-                pass
-        with self._value_lock:
-            self._value += 1
-
-
-def diskFree(pathName):
-    if hasattr(os, 'statvfs') :  # POSIX
-        st = os.statvfs(pathName)
-        return st.f_bavail * st.f_frsize
-    if os.name == 'nt' :  # Windows
-        import ctypes
-        import sys
-        free = ctypes.c_ulonglong()
-        ret = ctypes.windll.kernel32.GetDiskFreeSpaceExW(pathName, ctypes.byref(free), None, None)
-        if ret == 0 :
-            raise ctypes.WinError()
-        return free.value
-        raise NotImplementedError("platform not supported")
 
 
 def addPlotFile(pathName):
     fileName = os.path.basename(pathName)
     try:
-        key, startnonce, nonces, stagger = [ int(x) for x in fileName.split("_") ]
+        key, startNonce, nonces, stagger = [ int(x) for x in fileName.split("_") ]
         size = os.path.getsize(pathName)
         if nonces * NONCE_SIZE != size:
             msg = f"Error: Source file has invalid size! Expected {nonces * NONCE_SIZE} but file has {size}!"
             print(BRIGHTRED + msg + RESET_ALL)
             raise Exception(msg)
         plotFiles[pathName] = ( nonces, stagger )
-        plotInfos[startnonce] = [ pathName, 0 ]
+        plotInfos[startNonce] = [ pathName, 0 ]
         return key
     except Exception as exc:
         print(BRIGHTRED + f"Warning: Ignoring invalid source filename: {exc}" + RESET_ALL)
         raise
 
 
-def plotNonces(startnonce, nonces):
+def plotNonces(startNonce, nonces):
     cmdLine = [ plotterPathName, "-k", str(key), "-d", tmpDirName, "-t", str(threads), "-x", plotCore,
-                "-s", str(startnonce), "-n", str(nonces) ]
+                "-s", str(startNonce), "-n", str(nonces) ]
     print(BRIGHTGREEN + f"Compute {nonces} missing nonces through running:")
     print("  " + " ".join(cmdLine))
     if bDryRun :
@@ -81,14 +38,14 @@ def plotNonces(startnonce, nonces):
     if prc.returncode :
         print(BRIGHTRED + f"Error: Plotter returned with error code {prc.returncode}!" + RESET_ALL)
         sys.exit(1)
-    return os.path.join(tmpDirName, f"{key}_{startnonce}_{nonces}_{nonces}")
+    return os.path.join(tmpDirName, f"{key}_{startNonce}_{nonces}_{nonces}")
 
 
 def readerThread(buf, sem, lock):
     try:
         for scoop in range(NUM_SCOOPS):
-            for nr, startnonce in enumerate(startnonces):
-                pathName, skip = plotInfos[startnonce]
+            for nr, startNonce in enumerate(startNonces):
+                pathName, skip = plotInfos[startNonce]
                 nonces, stagger = plotFiles[pathName]
                 groupCnt = nonces // stagger
                 groupSize = stagger * NONCE_SIZE
@@ -164,6 +121,9 @@ if __name__ == "__main__":
             outDirName = arg
             continue
         if outDirName == "-o":
+            if not os.path.exists(arg):
+                print(BRIGHTRED + f"Error: Output directory does not exist!" + RESET_ALL)
+                sys.exit(1)
             outDirName = arg
             continue
         if arg == "-t":
@@ -212,30 +172,33 @@ if __name__ == "__main__":
             else:
                 print(BRIGHTRED + "Error: Tried to merge plot files with different keys!" + RESET_ALL)
                 sys.exit(1)
+    if len(plotFiles) < 2:
+        print(BRIGHTRED + f"Error: No source plot files to merge!" + RESET_ALL)
+        sys.exit(1)
     if plotCore is None:
         plotCore = "0"
     if tmpDirName in ( None, "-t" ):
         tmpDirName = os.path.dirname(list(plotFiles.keys())[0])
     # Check for overlapping files and missing nonces
-    startnonces = sorted(plotInfos)
-    totalnonces = 0
+    startNonces = sorted(plotInfos)
+    totalNonces = 0
     bCreateMissing = False
-    for nr, startnonce in enumerate(startnonces):
-        pathName = plotInfos[startnonce][0]
+    for nr, startNonce in enumerate(startNonces):
+        pathName = plotInfos[startNonce][0]
         nonces = plotFiles[pathName][0]
-        totalnonces += nonces
+        totalNonces += nonces
         if (nr == 0) and outDirName in ( None, "-o" ):
             outDirName = os.path.dirname(pathName)
-        if nr + 1 >= len(startnonces):
+        if nr + 1 >= len(startNonces):
             continue
-        skip = plotInfos[startnonce][1] = startnonce + nonces - startnonces[nr + 1]
-        totalnonces -= skip
+        skip = plotInfos[startNonce][1] = startNonce + nonces - startNonces[nr + 1]
+        totalNonces -= skip
         if skip > 0:
-            print(BRIGHTYELLOW + f"Info: Overlapping files\n {pathName}\n and\n {plotInfos[startnonces[nr + 1]][0]}!")
+            print(BRIGHTYELLOW + f"Info: Overlapping files\n {pathName}\n and\n {plotInfos[startNonces[nr + 1]][0]}!")
             print(BRIGHTGREEN + f"Skipping last {skip} nonces in {pathName}!" + RESET_ALL)
         elif skip < 0:
             bCreateMissing = True
-            print(BRIGHTYELLOW + f"Info: Missing {-skip} nonces between\n {pathName}\n and\n {plotInfos[startnonces[nr + 1]][0]}!")
+            print(BRIGHTYELLOW + f"Info: Missing {-skip} nonces between\n {pathName}\n and\n {plotInfos[startNonces[nr + 1]][0]}!")
             if plotterPathName is None:
                 print(BRIGHTRED + "Error: Path to plotter not set!" + RESET_ALL)
                 sys.exit(1)
@@ -245,8 +208,8 @@ if __name__ == "__main__":
     threads8 = threads * 8
     if bCreateMissing:
         # Compute missing nonces
-        for startnonce in startnonces:
-            pathName, skip = plotInfos[startnonce]
+        for startNonce in startNonces:
+            pathName, skip = plotInfos[startNonce]
             nonces = plotFiles[pathName][0]
             if skip >= 0:
                 continue
@@ -256,31 +219,31 @@ if __name__ == "__main__":
                 missingNonces = threads * 8
             elif missingNonces % (threads8):
                 missingNonces = ((missingNonces // threads8) + 1) * threads8
-            newstartnonce = startnonce + nonces
-            pathName = plotNonces(newstartnonce, missingNonces)
+            newStartNonce = startNonce + nonces
+            pathName = plotNonces(newStartNonce, missingNonces)
             if pathName:
                 plotFiles[pathName] = ( missingNonces, missingNonces )
-                plotInfos[newstartnonce] = [ pathName, missingNonces + skip ]
-        startnonces = sorted(plotInfos)
-    if totalnonces % threads8:
-        plotInfos[startnonces[-1]][1] = totalnonces % threads8
-        newstartnonce = (totalnonces // threads8) * threads8
-        totalnonces = newstartnonce + threads8
-        pathName = plotNonces(newstartnonce, threads8)
+                plotInfos[newStartNonce] = [ pathName, missingNonces + skip ]
+        startNonces = sorted(plotInfos)
+    if totalNonces % threads8:
+        plotInfos[startNonces[-1]][1] = totalNonces % threads8
+        newStartNonce = (totalNonces // threads8) * threads8
+        totalNonces = newStartNonce + threads8
+        pathName = plotNonces(newStartNonce, threads8)
         if pathName:
             plotFiles[pathName] = ( threads8, threads8 )
-            plotInfos[newstartnonce] = [ pathName, 0 ]
-    startnonces = sorted(plotInfos)
-    outPathName = os.path.join(outDirName, f"{key}_{startnonces[0]}_{totalnonces}_{totalnonces}")
-    outSize = totalnonces * NONCE_SIZE
+            plotInfos[newStartNonce] = [ pathName, 0 ]
+    startNonces = sorted(plotInfos)
+    outPathName = os.path.join(outDirName, f"{key}_{startNonces[0]}_{totalNonces}_{totalNonces}")
+    outSize = totalNonces * NONCE_SIZE
     print(BRIGHTYELLOW + f"Merging {len(plotInfos)} plot files:")
-    for startnonce in startnonces:
-        print("  " + plotInfos[startnonce][0])
+    for startNonce in startNonces:
+        print("  " + plotInfos[startNonce][0])
     print(f"Destination file {outPathName} will have:")
-    print(f"  Start Nonce: {startnonces[0]}")
-    print(f"  Nonces:      {totalnonces}")
+    print(f"  Start Nonce: {startNonces[0]}")
+    print(f"  Nonces:      {totalNonces}")
     print(f"  File size:   {outSize // 1024 // MB} GB")
-    for pathName in  ( outPathName + ".merging", outPathName + ".merged" ):
+    for pathName in ( outPathName + ".merging", outPathName ):
         if os.path.exists(pathName):
             print(BRIGHTRED + f"Warning: Destination file {pathName} already exists! Removing it!" + RESET_ALL)
             if not bDryRun:
@@ -319,8 +282,10 @@ if __name__ == "__main__":
                     t1 = t2
             except KeyboardInterrupt:
                 bStop = True
+                buf.clear()
             except:
                 lock.acquire()
+    thrReader.join()
     if bStop:
         print(BRIGHTRED + "\nCancelled by user")
         sys.exit(1)
