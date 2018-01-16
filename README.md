@@ -1,11 +1,11 @@
 # plotTools
 Some useful tools for Burst coin plot files.
 The tools are written in Python 3 and should work on any platform.
-For plotMerger there is currently one limitation:
+###### For plotMerger there is currently one limitation:
     In case of holes (missing nonces) between plot files for merging only the plotter from repo cg_obup is supported.
 
 ## plotChecker: Burst plot checker (version 1.0)
-   Checking and validation of plots for BURST
+   Checking and validation of plots for Burst
    Translated into Python 3.6 from Blago's C++ version which is only for Windows.
 
 ## plotOptimizer: Burst plot optimizer (version 1.0)
