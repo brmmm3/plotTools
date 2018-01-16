@@ -43,9 +43,10 @@ if __name__ == "__main__":
             if fileSize == nonces * NONCE_SIZE:
                 print(BRIGHTGREEN + f"OK {pathName}" + RESET_ALL)
                 continue
-            if nonces == stagger:
-                print(BRIGHTRED + f"INVALID (replot) {pathName}" + RESET_ALL)
-                continue
+            # Why is an optimized plot invalid (in Blago's plot checker)?
+            #if nonces == stagger:
+            #    print(BRIGHTRED + f"INVALID (replot) {pathName}" + RESET_ALL)
+            #    continue
             newNonces = int(fileSize / NONCE_SIZE / stagger) * stagger
             newPathName = os.path.join(plotsDirName, f"{key}_{nonce}_{newNonces}_{stagger}")
             try:
