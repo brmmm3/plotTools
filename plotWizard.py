@@ -36,7 +36,7 @@ def execute(cmdLine, cwd = None, lock = None):
     stderr = Queue()
     tStdErr = Thread(target = enqueue_output, args = ( prc.stderr, stderr ), daemon = True)
     tStdErr.start()
-    while not bCancel and prc.returncode is None and lock is None or lock.locked():
+    while not bCancel and prc.poll() is None and lock is None or lock.locked():
         while True:
             try:
                 line = stdout.get(timeout = 0.1)
