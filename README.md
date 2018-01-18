@@ -36,3 +36,22 @@ The tools are written in Python 3 and should work on any platform.
     -s Destination size of splitted plot files (either nonce count or size with K|M|G|T).
     -o Optional output directory. If omitted the output is written to same directory as input.
     -d Dry run.
+
+## plotWizard: Burst plot wizard (version 1.0)
+   Helps you to automatically fill disks with plot files.
+   ###### Usage:
+    plotWizard.py -k Key [-p PlotterPath] [-x PlotCore] [-m MaxMemUsage] [-M CreepMinerPath] [-c Path2MiningConf] [-R] [-s MinPlotSize] [-S MaxPlotSize] [-f MinDiskFree] [-d] [-C PlotWizardConf] [-t TMPDIR] [PLOTSDIR1] [PLOTSDIR2]...
+   ###### Options:
+    -C = Path to plotWizard's configuration file.
+    -p = Path to cg_obup plotter executable.
+    -m = Maximum RAM usage (Default = 4 GB).
+    -M = Path to creepMiner executable.
+    -c = Path to mining.conf for creepMiner.
+    -R = Restart creepMiner after each successfully created plot file.
+    -s = Minimum size of plot files (Default = 10 GB).
+    -S = Maximum size of plot files (Default = 1 TB).
+    -f = Minimum free size disk space to keep (Default is 0).
+        Example: 4G,/media/plot1:10G -> For /media/plot1 10G, for all others 4G
+    -d Dry run.
+    -t = Temporary directory for plot file creation.
+    PLOTSDIRx directories for plot files.
