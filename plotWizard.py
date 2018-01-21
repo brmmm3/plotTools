@@ -103,7 +103,7 @@ def writerThread(pathName, size, buf, lock, result):
                     if t2 - t1 >= 5.0:
                         percent = (100 * written) // size
                         speed = int((written - lastWritten) / (t2 - t1) / MB)
-                        print(BRIGHTGREEN + f"{percent}%% written ({speed} MB/s) to {pathName}..." + RESET_ALL)
+                        print(BRIGHTGREEN + f"{percent}% written ({speed} MB/s) to {pathName}..." + RESET_ALL)
                         lastWritten = written
                         t1 = t2
                 except:
