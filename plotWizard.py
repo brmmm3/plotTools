@@ -19,9 +19,7 @@ ON_POSIX = 'posix' in sys.builtin_module_names
 
 def enqueue_output(out, queue):
     for line in iter(out.readline, b''):
-        line = line.strip()
-        if line:
-            queue.put(line.decode("utf-8"))
+        queue.put(line.decode("utf-8"))
     out.close()
 
 
@@ -36,21 +34,21 @@ def execute(cmdLine, cwd = None, lock = None):
     stderr = Queue()
     tStdErr = Thread(target = enqueue_output, args = ( prc.stderr, stderr ), daemon = True)
     tStdErr.start()
-    while not bCancel and prc.poll() is None and lock is None or lock.locked():
+    while not bCancel and prc.poll() is None and (lock is None or lock.locked()):
         while True:
             try:
                 line = stdout.get(timeout = 0.1)
             except Empty:
                 break
             else:
-                print(BRIGHTGREEN + line + RESET_ALL)
+                print(line, end = "")
         while True:
             try:
                 line = stderr.get(timeout = 0.1)
             except Empty:
                 break
             else:
-                print(BRIGHTRED + line + RESET_ALL)
+                print(line, end = "")
     if not lock is None and not lock.locked():
         prc.terminate()
     if prc.returncode:
@@ -82,7 +80,7 @@ def createPlotFilesThread(plotFiles, moveFiles):
               + RESET_ALL)
         if not bDryRun:
             cmdLine = [ plotterPathName, "-k", str(key), "-d", dirName, "-t", str(threadCnt), "-x", plotCore,
-                        "-s", str(startNonce), "-n", str(nonces), "-m", str(plotMemUsage // NONCE_SIZE) ]
+                        "-s", str(startNonce), "-n", str(nonces), "-m", str(staggerSize) ]
             execute(cmdLine, cwd)
         if dirName != dstDirName:
             moveFiles.append(( plotFileNum, fileName, dirName, dstDirName ))
@@ -90,7 +88,36 @@ def createPlotFilesThread(plotFiles, moveFiles):
     print(BRIGHTBLUE + "createPlotFilesThread finished." + RESET_ALL)
 
 
+def writerThread(pathName, size, buf, lock, result):
+    try:
+        t1 = time.time()
+        written = 0
+        lastWritten = 0
+        with open(pathName, "wb") as O:
+            while True:
+                try:
+                    data = buf.popleft()
+                    if data is None:
+                        break
+                    t2 = time.time()
+                    if t2 - t1 >= 5.0:
+                        percent = (100 * written) // size
+                        speed = int((written - lastWritten) / (t2 - t1) / MB)
+                        print(BRIGHTGREEN + f"{percent}%% written ({speed} MB/s) to {pathName}..." + RESET_ALL)
+                        lastWritten = written
+                        t1 = t2
+                except:
+                    lock.acquire()
+                else:
+                    O.write(data)
+                    written += len(data)
+        result.append(True)
+    except Exception as exc:
+        result.append(exc)
+
+
 def movePlotFilesThread(moveFiles, minerLock):
+    writerLock = _thread.allocate_lock()
     while not bCancel:
         if not moveFiles:
             time.sleep(0.1)
@@ -104,8 +131,37 @@ def movePlotFilesThread(moveFiles, minerLock):
               + f"{plotFileNum}/{plotFileCnt} Moving plot file {fileName} from {srcDirName} to {dstDirName}..."
               + RESET_ALL)
         if not bDryRun:
-            execute([ "dd", f"if={srcPathName}", f"of={os.path.join(dstDirName, fileName)}",  "bs=1M", "status=progress" ])
-            os.remove(srcPathName)
+            #execute([ "dd", f"if={srcPathName}", f"of={os.path.join(dstDirName, fileName)}",  "bs=1M", "status=progress" ])
+            buf = deque()
+            result = []
+            thrWriter = Thread(target = writerThread, args = ( os.path.join(dstDirName, fileName), os.path.getsize(srcPathName),
+                                                               buf, writerLock, result ),
+                               daemon = True)
+            thrWriter.start()
+            bRemove = True
+            try:
+                with open(srcPathName, "rb") as I:
+                    while thrWriter.is_alive():
+                        data = I.read(MB)
+                        if not data:
+                            break
+                        buf.append(data)
+                        if writerLock.locked():
+                            writerLock.release()
+                        while (len(buf) > 100) and thrWriter.is_alive():
+                            time.sleep(0.1)
+            except Exception as exc:
+                bRemove = False
+                print(BRIGHTRED + f"Failed moving file {fileName}:\n{exc}" + RESET_ALL)
+            buf.append(None)
+            if writerLock.locked():
+                writerLock.release()
+            thrWriter.join()
+            if bRemove and result:
+                if result[0] is True:
+                    os.remove(srcPathName)
+                else:
+                    print(BRIGHTRED + f"writerThread failed with exception {exc}!")
         if bRestartMiner and minerLock.locked():
             minerLock.release()
     if minerLock.locked():
@@ -384,6 +440,8 @@ if __name__ == "__main__":
     minerLock = _thread.allocate_lock()
     plotFileCnt = 0
     maxPlotSize -= maxPlotSize % plotMemUsage
+    staggerSize = plotMemUsage // NONCE_SIZE
+    print(BRIGHTGREEN + f"Stagger Size = {staggerSize}" + RESET_ALL)
     threadCnt = os.cpu_count() // 2
     plotFiles = deque()
     moveFiles = deque()
@@ -409,7 +467,12 @@ if __name__ == "__main__":
             if (dirName == tmpDirName) and (len(plotFileNonces) > 1):
                 continue
             nonces = min(plotFileNonces[dirName], maxPlotSize // NONCE_SIZE)
-            print(BRIGHTGREEN + f"Create plot file with {nonces} nonces ({nonces * NONCE_SIZE //GB} GB) for {dirName}..."
+            if nonces % staggerSize:
+                newNonces = nonces - (nonces % staggerSize)
+                print(BRIGHTYELLOW + f"Adjust nonces from {nonces} to {newNonces} to match stagger size {staggerSize}."
+                      + RESET_ALL)
+                nonces = newNonces
+            print(BRIGHTGREEN + f"Create plot file with {nonces} nonces ({nonces * NONCE_SIZE // GB} GB) for {dirName}..."
                   + RESET_ALL)
             plotFileCnt += 1
             plotFiles.append(( plotFileCnt, startNonce, nonces, dirName ))
