@@ -469,6 +469,9 @@ if __name__ == "__main__":
             nonces = min(plotFileNonces[dirName], maxPlotSize // NONCE_SIZE)
             if nonces % staggerSize:
                 newNonces = nonces - (nonces % staggerSize)
+                if newNonces <= 0:
+                    del plotFileNonces[dirName]
+                    continue
                 print(BRIGHTYELLOW + f"Adjust nonces from {nonces} to {newNonces} to match stagger size {staggerSize}."
                       + RESET_ALL)
                 nonces = newNonces
