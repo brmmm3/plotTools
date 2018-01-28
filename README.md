@@ -74,3 +74,15 @@ apt-get update
 apt-get install python3.6 -t testing
 ```
 You may want to say yes to all questions asked while installing python3.6
+
+If you are using Ubuntu or and distribution which is based on Ubuntu you may add the following ppa:
+```
+sudo add-apt-repository ppa:jonathonf/python-3.6
+sudo apt-get update
+sudo apt install python3.6
+```
+
+For colored output you may also want to install colorama, but this is optional.
+```
+pip3.6 install --user colorama
+```
