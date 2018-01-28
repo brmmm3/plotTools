@@ -57,7 +57,7 @@ The tools are written in Python 3.6 and should work on any platform.
     PLOTSDIRx directories for plot files.
 
 
-## Python3.6
+#### Python 3.6
 If you are using Debian Stretch you will need python3.6.
 This is packaged for testing already, so you can use testing.
 To do so, execute those things as root:
