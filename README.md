@@ -1,6 +1,6 @@
 # plotTools
 Some useful tools for Burst coin plot files.
-The tools are written in Python 3 and should work on any platform.
+The tools are written in Python 3.6 and should work on any platform.
 ###### For plotMerger there is currently one limitation:
     In case of holes (missing nonces) between plot files for merging only the plotter from repo cg_obup is supported.
 
@@ -55,3 +55,22 @@ The tools are written in Python 3 and should work on any platform.
     -d Dry run.
     -t = Temporary directory for plot file creation.
     PLOTSDIRx directories for plot files.
+
+
+## Python3.6
+If you are using Debian Stretch you will need python3.6.
+This is packaged for testing already, so you can use testing.
+To do so, execute those things as root:
+```
+# Add Testing Repository
+echo "deb http://ftp.debian.org/debian testing main non-free contrib" > /etc/apt/sources.list.d/testing
+# Get your current installed codename
+codename=$(lsb_release -c |awk '{print $2}')
+# Pin your current installation to $codename
+echo "APT::Default-Release \"${codename}\";" > /etc/apt/apt.conf.d/99DefaultRLS
+# Update your repository infos
+apt-get update
+# Install python3.6 from testing
+apt-get install python3.6 -t testing
+```
+You may want to say yes to all questions asked while installing python3.6
