@@ -25,7 +25,7 @@ def addPlotFile(pathName):
         raise
 
 
-def plotNonces(startNonce, nonces):
+def createPlotFile(startNonce, nonces):
     cmdLine = [ plotterPathName, "-k", str(key), "-d", tmpDirName, "-t", str(threads), "-x", plotCore,
                 "-s", str(startNonce), "-n", str(nonces) ]
     print(BRIGHTGREEN + f"Compute {nonces} missing nonces through running:")
@@ -88,8 +88,8 @@ if __name__ == "__main__":
         init()
     except:
         BRIGHTRED = BRIGHTGREEN = BRIGHTBLUE = BRIGHTYELLOW = RESET_ALL = ""
+    print(BRIGHTGREEN + "BURST plots merger (version 1.0)" + RESET_ALL)
     if len(sys.argv) < 2:
-        print(BRIGHTGREEN + "BURST plots merger (version 1.0)")
         print(BRIGHTBLUE + "Usage: %s [-p PlotterPath] [-x PlotCore] [-r] [-d] [-o OUTDIR] [-t TMPDIR] INPATH1 INPATH2 ..."
               % sys.argv[0])
         print("-r = Remove old files after successfull merge.")
@@ -220,19 +220,11 @@ if __name__ == "__main__":
             elif missingNonces % (threads8):
                 missingNonces = ((missingNonces // threads8) + 1) * threads8
             newStartNonce = startNonce + nonces
-            pathName = plotNonces(newStartNonce, missingNonces)
+            pathName = createPlotFile(newStartNonce, missingNonces)
             if pathName:
                 plotFiles[pathName] = ( missingNonces, missingNonces )
                 plotInfos[newStartNonce] = [ pathName, missingNonces + skip ]
         startNonces = sorted(plotInfos)
-    if totalNonces % threads8:
-        plotInfos[startNonces[-1]][1] = totalNonces % threads8
-        newStartNonce = (totalNonces // threads8) * threads8
-        totalNonces = newStartNonce + threads8
-        pathName = plotNonces(newStartNonce, threads8)
-        if pathName:
-            plotFiles[pathName] = ( threads8, threads8 )
-            plotInfos[newStartNonce] = [ pathName, 0 ]
     startNonces = sorted(plotInfos)
     outPathName = os.path.join(outDirName, f"{key}_{startNonces[0]}_{totalNonces}_{totalNonces}")
     outSize = totalNonces * NONCE_SIZE
