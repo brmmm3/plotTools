@@ -29,15 +29,31 @@ def writerThread(F, q):
         F.write(data)
 
 
-def copyFile(S, D):
+def copyFile(S, D, size):
     q = deque()
     thr = Thread(target=writerThread, args=(D, q), daemon=True)
     thr.start()
+    t0 = time.time()
+    cnt = 0
+    total = 0
     while True:
         data = S.read(MB)
         if not data:
             break
-        q.append(data)
+        dataLen = len(data)
+        if total + dataLen < size:
+            q.append(data)
+            total += dataLen
+            cnt += dataLen
+        else:
+            q.append(data[:size - total])
+            break
+        t1 = time.time()
+        dt = t1 - t0
+        if dt >= 1.0:
+            print(f"Copied {round(total / GB, 1)} GB ({cnt // dt // MB} MB/s).")
+            cnt = 0
+            t0 = t1
         while len(q) > 64:
             time.sleep(0.01)
     q.append(None)
@@ -45,25 +61,25 @@ def copyFile(S, D):
 
 
 def getDiskSize(dev):
-    return int(open(f"/sys/block/{dev}/size").read()) * SECTOR_SIZE
+    return int(open(f"/sys/block/{os.path.basename(dev)}/size").read()) * SECTOR_SIZE
 
 
 def initDevice(dev):
     print("Initialize device...")
     with open(dev, "wb") as D:
-        D.write(b"BFS0" + "\0" * 1020)
+        D.write(b"BFS0" + b"\0" * 1020)
 
 
 def readTOC(dev):
     with open(dev, "rb") as D:
-        tocData = D.read(1024)
+        tocData = bytearray(D.read(1024))
     if not tocData.startswith(b"BFS0"):
         print("ERROR: Device does not have a BFS table!")
         sys.exit(1)
     toc = {}
     for i in range(31):
         pos = 4 + i * 32
-        key, startNonce, nonces, stagger, info = struct.unpack("QQLLQ", tocData[pos:pos + 32])
+        key, startNonce, nonces, stagger, info = struct.unpack("QQIIQ", tocData[pos:pos + 32])
         if key != 0:
             toc[info & 0xffffffffffff] = ( key, startNonce, nonces, stagger, info >> 48, f"{key}_{startNonce}_{nonces}_{stagger}" )
     return tocData, toc
@@ -71,11 +87,11 @@ def readTOC(dev):
 
 def listPlotFiles(dev):
     size = getDiskSize(dev) - 2 * SECTOR_SIZE
-    print(f"Contents of {dev} with size {size / GB}GB:")
+    print(f"Contents of {dev} with size {int(size / GB + 0.5)} GB:")
     for startPos, (key, startNonce, nonces, stagger, status, fileName) in sorted(readTOC(dev)[1].items()):
         size -= nonces * NONCE_SIZE
         print(f"{key}_{startNonce}_{nonces}_{stagger} with size {nonces // 4096}GB starts at sector {startPos >> 9}")
-    print(f"{size / GB}GB free space left.")
+    print(f"{int(size / GB + 0.5)} GB free space left.")
 
 
 def writePlotFiles(dev, plotFiles):
@@ -96,10 +112,11 @@ def writePlotFiles(dev, plotFiles):
         if lastPos < size:
             freeBlocks[lastPos] = size - lastPos
     else:
-        freeBlocks[0] = size
+        freeBlocks[1024] = size
     # Write plot files
     with open(dev, "wb") as D:
         for plotFile in plotFiles:
+            plotFileName = os.path.basename(plotFile)
             # Check filename
             try:
                 key, startNonce, nonces, stagger = [ int(x) for x in os.path.basename(plotFile).split("_") ]
@@ -110,6 +127,14 @@ def writePlotFiles(dev, plotFiles):
             if len(toc) >= 31:
                 print("ERROR: TOC is full!")
                 sys.exit(1)
+            bExists = False
+            for key, startNonce, nonces, stagger, status, fileName in toc.values():
+                if plotFileName == fileName:
+                    bExists = True
+                    break
+            if bExists:
+                print(f"ERROR: File {fileName} already exists!")
+                continue
             # Search for free block with enough size
             plotSize = os.stat(plotFile).st_size
             for startPos in sorted(freeBlocks):
@@ -121,7 +146,7 @@ def writePlotFiles(dev, plotFiles):
             # Copy file
             D.seek(startPos)
             with open(plotFile, "rb") as F:
-                copyFile(F, D)
+                copyFile(F, D, plotSize)
             if freeBlocks[startPos] == plotSize:
                 del freeBlocks[startPos]
             else:
@@ -130,9 +155,9 @@ def writePlotFiles(dev, plotFiles):
             toc[startPos] = (key, startNonce, nonces, stagger, ST_OK, f"{key}_{startNonce}_{nonces}_{stagger}")
             for i in range(31):
                 pos = 4 + i * 32
-                if struct.unpack("QQLLQ", toc[pos:pos + 32])[0] == 0:
+                if struct.unpack("QQIIQ", tocData[pos:pos + 32])[0] == 0:
                     info = (ST_OK << 48) | startPos
-                    tocData[pos:pos + 32] = struct.pack("QQLLQ", key, startNonce, nonces, stagger, info)
+                    tocData[pos:pos + 32] = struct.pack("QQIIQ", key, startNonce, nonces, stagger, info)
                     D.seek(0)
                     D.write(tocData)
                     break
@@ -145,7 +170,7 @@ def readPlotFiles(dev, plotFiles):
                 with open(plotFile, "wb") as F:
                     with open(dev, "rb") as D:
                         D.seek(startPos)
-                        copyFile(D, F)
+                        copyFile(D, F, nonces * NONCE_SIZE)
                 break
         else:
             print(f"ERROR: File {fileName} not found on device {dev}!")
@@ -161,10 +186,10 @@ def deletePlotFiles(dev, plotFiles):
                 break
         else:
             print(f"ERROR: File {plotFileName} not found on device {dev}!")
-    newData = b"BFS0" + "\0" * 1020
+    newData = b"BFS0" + b"\0" * 1020
     for i, startPos, (key, startNonce, nonces, stagger, status, fileName) in enumerate(sorted(toc.items())):
         pos = 4 * i * 32
-        newData[pos:pos + 32] = struct.pack("QQLLQ", key, startNonce, nonces, stagger, (status << 48) | startPos)
+        newData[pos:pos + 32] = struct.pack("QQIIQ", key, startNonce, nonces, stagger, (status << 48) | startPos)
     # Write TOC
     with open(dev, "wb") as D:
         D.write(newData)
@@ -176,6 +201,7 @@ if __name__ == "__main__":
     if not dev.startswith("/dev/"):
         print("Parameter must be a valid disk device!")
         sys.exit(1)
+    t0 = time.time()
     if command == "i":
         initDevice(dev)
     elif command == "l":
@@ -186,3 +212,4 @@ if __name__ == "__main__":
         readPlotFiles(dev, sys.argv[3:])
     elif command == "d":
         deletePlotFiles(dev, sys.argv[3:])
+    print(f"Finished after {int(time.time() - t0)} seconds.")
