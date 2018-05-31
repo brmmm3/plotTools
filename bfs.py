@@ -5,7 +5,7 @@ import sys
 import struct
 import time
 from collections import deque
-from threading import Thread
+from threading import Thread, Event
 
 SECTOR_SIZE = 512
 NONCE_SIZE = 262144
@@ -17,12 +17,13 @@ ST_OK = 1
 ST_INCOMPLETE = 2
 
 
-def writerThread(F, q):
+def writerThread(F, q, ev):
     while True:
         try:
             data = q.popleft()
         except:
-            time.sleep(0.01)
+            ev.wait()
+            ev.clear()
             continue
         if data is None:
             break
@@ -31,7 +32,8 @@ def writerThread(F, q):
 
 def copyFile(S, D, size):
     q = deque()
-    thr = Thread(target=writerThread, args=(D, q), daemon=True)
+    ev = Event()
+    thr = Thread(target=writerThread, args=(D, q, ev), daemon=True)
     thr.start()
     t0 = time.time()
     cnt = 0
@@ -43,14 +45,16 @@ def copyFile(S, D, size):
         dataLen = len(data)
         if total + dataLen < size:
             q.append(data)
+            ev.set()
             total += dataLen
             cnt += dataLen
         else:
             q.append(data[:size - total])
+            ev.set()
             break
         t1 = time.time()
         dt = t1 - t0
-        if dt >= 1.0:
+        if dt >= 2.0:
             print(f"Copied {round(total / GB, 1)} GB ({cnt // dt // MB} MB/s).")
             cnt = 0
             t0 = t1
@@ -79,7 +83,7 @@ def readTOC(dev):
     toc = {}
     for i in range(31):
         pos = 4 + i * 32
-        key, startNonce, nonces, stagger, info = struct.unpack("QQIIQ", tocData[pos:pos + 32])
+        key, startNonce, nonces, stagger, info = struct.unpack("<QQIIQ", tocData[pos:pos + 32])
         if key != 0:
             toc[info & 0xffffffffffff] = ( key, startNonce, nonces, stagger, info >> 48, f"{key}_{startNonce}_{nonces}_{stagger}" )
     return tocData, toc
@@ -147,17 +151,16 @@ def writePlotFiles(dev, plotFiles):
             D.seek(startPos)
             with open(plotFile, "rb") as F:
                 copyFile(F, D, plotSize)
-            if freeBlocks[startPos] == plotSize:
-                del freeBlocks[startPos]
-            else:
-                freeBlocks[startPos] -= plotSize
+            if freeBlocks[startPos] > plotSize:
+                freeBlocks[startPos + plotSize] = freeBlocks[startPos] - plotSize
+            del freeBlocks[startPos]
             # Add file to TOC
             toc[startPos] = (key, startNonce, nonces, stagger, ST_OK, f"{key}_{startNonce}_{nonces}_{stagger}")
             for i in range(31):
                 pos = 4 + i * 32
-                if struct.unpack("QQIIQ", tocData[pos:pos + 32])[0] == 0:
+                if struct.unpack("<QQIIQ", tocData[pos:pos + 32])[0] == 0:
                     info = (ST_OK << 48) | startPos
-                    tocData[pos:pos + 32] = struct.pack("QQIIQ", key, startNonce, nonces, stagger, info)
+                    tocData[pos:pos + 32] = struct.pack("<QQIIQ", key, startNonce, nonces, stagger, info)
                     D.seek(0)
                     D.write(tocData)
                     break
@@ -189,7 +192,7 @@ def deletePlotFiles(dev, plotFiles):
     newData = b"BFS0" + b"\0" * 1020
     for i, startPos, (key, startNonce, nonces, stagger, status, fileName) in enumerate(sorted(toc.items())):
         pos = 4 * i * 32
-        newData[pos:pos + 32] = struct.pack("QQIIQ", key, startNonce, nonces, stagger, (status << 48) | startPos)
+        newData[pos:pos + 32] = struct.pack("<QQIIQ", key, startNonce, nonces, stagger, (status << 48) | startPos)
     # Write TOC
     with open(dev, "wb") as D:
         D.write(newData)
