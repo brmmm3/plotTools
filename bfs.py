@@ -55,13 +55,19 @@ def copyFile(S, D, size):
         t1 = time.time()
         dt = t1 - t0
         if dt >= 2.0:
-            print(f"Copied {round(total / GB, 1)} GB ({cnt // dt // MB} MB/s).")
+            speed = cnt // dt
+            leftSize = size - total
+            minutes = leftSize / speed / 60 # Time left in minutes
+            hours = int(minutes / 60)
+            minutes = int(minutes) - hours * 60
+            print(f"\rCopied {total / GB:.1f} GB ({speed // MB} MB/s). Left {leftSize / GB:.1f} GB ({hours:02d}:{minutes:02d})     ", end="")
             cnt = 0
             t0 = t1
         while len(q) > 64:
             time.sleep(0.01)
     q.append(None)
     thr.join()
+    print()
 
 
 def getDiskSize(dev):
@@ -123,7 +129,7 @@ def writePlotFiles(dev, plotFiles):
             plotFileName = os.path.basename(plotFile)
             # Check filename
             try:
-                key, startNonce, nonces, stagger = [ int(x) for x in os.path.basename(plotFile).split("_") ]
+                key, startNonce, nonces, stagger = [ int(x) for x in os.path.basename(plotFileName).split("_") ]
             except Exception as exc:
                 print(f"ERROR: Invalid source filename: {plotFile}:\n{exc}")
                 continue
@@ -132,7 +138,7 @@ def writePlotFiles(dev, plotFiles):
                 print("ERROR: TOC is full!")
                 sys.exit(1)
             bExists = False
-            for key, startNonce, nonces, stagger, status, fileName in toc.values():
+            for _, _, _, _, _, fileName in toc.values():
                 if plotFileName == fileName:
                     bExists = True
                     break
@@ -147,6 +153,7 @@ def writePlotFiles(dev, plotFiles):
             else:
                 print(f"ERROR: Not enough free space for {plotFile}!")
                 continue
+            print(f"Write file {plotFile} to {dev}...")
             # Copy file
             D.seek(startPos)
             with open(plotFile, "rb") as F:
@@ -170,6 +177,7 @@ def readPlotFiles(dev, plotFiles):
     for startPos, ( key, startNonce, nonces, stagger, status, fileName ) in sorted(readTOC(dev)[1].items()):
         for plotFile in plotFiles:
             if plotFile.endswith(fileName):
+                print(f"Copy file {os.path.basename(plotFile)} from {dev} to {plotFile}...")
                 with open(plotFile, "wb") as F:
                     with open(dev, "rb") as D:
                         D.seek(startPos)
@@ -206,7 +214,8 @@ if __name__ == "__main__":
         sys.exit(1)
     t0 = time.time()
     if command == "i":
-        initDevice(dev)
+        if input("Really want to delete all data on disk (y/n)?").lower() == "y":
+            initDevice(dev)
     elif command == "l":
         listPlotFiles(dev)
     elif command == "w":
