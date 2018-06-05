@@ -56,6 +56,20 @@ The tools are written in Python 3.6 and should work on any platform.
     -t = Temporary directory for plot file creation.
     PLOTSDIRx directories for plot files.
 
+## bfs: Manage BFS (Burst File System) on hard disks
+    ###### Usage:
+     python3 bfs.py <Command> <Device> [plot files]
+    ###### Commands:
+     i Initialize hard disk with BFS (write empty contents table into first 1024 bytes).
+       python3 bfs.py i /dev/sdX
+     w Write plot files to BFS
+       python3 bfs.py w /dev/sdX plotfile1 plotfile2 ...
+     r Read plot files from BFS
+       python3 bfs.py r /dev/sdX plotfile1 plotfile2 ...
+     l List BFS contents
+       python3 bfs.py l /dev/sdX
+     d Delete plot files from BFS (just updates the contents table)
+       python3 bfs.py d /dev/sdX plotfile1 plotfile2 ...
 
 #### Python 3.6
 If you are using Debian Stretch you will need python3.6.
