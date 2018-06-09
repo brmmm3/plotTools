@@ -72,6 +72,18 @@ def copyFile(S, D, size):
     print()
 
 
+def getDeviceList():
+    name2dev = {}
+    dev2name = {}
+    for fileName in os.listdir("/dev/disk/by-id"):
+        pathName = "/dev/disk/by-id/" + fileName
+        if os.path.islink(pathName):
+            realPathName = os.path.realpath(pathName)
+            name2dev[fileName] = realPathName
+            dev2name[realPathName] = fileName
+    return name2dev, dev2name
+
+
 def getDiskSize(dev):
     return int(open(f"/sys/block/{os.path.basename(dev)}/size").read()) * SECTOR_SIZE
 
@@ -100,7 +112,7 @@ def readTOC(dev):
     return tocData, toc
 
 
-def listPlotFiles(dev):
+def listPlotFiles(dev, dev2name):
     if "*" in dev or "?" in dev:
         devices = glob.glob(dev)
     else:
@@ -108,7 +120,7 @@ def listPlotFiles(dev):
     for device in devices:
         try:
             size = getDiskSize(device) - 2 * SECTOR_SIZE
-            print(f"Contents of {device} with size {int(size / GB + 0.5)} GB:")
+            print(f"Contents of {device} ({dev2name.get(device)}) with size {int(size / GB + 0.5)} GB:")
             for startPos, (key, startNonce, nonces, stagger, status, fileName) in sorted(readTOC(device)[1].items()):
                 size -= nonces * NONCE_SIZE
                 print(
@@ -234,6 +246,10 @@ def deletePlotFiles(dev, plotFiles):
 if __name__ == "__main__":
     command = sys.argv[1].lower()
     dev = sys.argv[2]
+    name2dev, dev2name = getDeviceList()
+    # Either path to device or device name (found in /dev/disk/by-id) is allowed
+    if dev in name2dev:
+        dev = name2dev[dev]
     if not dev.startswith("/dev/"):
         print("Parameter must be a valid disk device!")
         sys.exit(1)
@@ -242,7 +258,7 @@ if __name__ == "__main__":
         if input("Really want to delete all data on disk (y/n)?").lower() == "y":
             initDevice(dev)
     elif command == "l":
-        listPlotFiles(dev)
+        listPlotFiles(dev, dev2name)
     elif command == "w":
         writePlotFiles(dev, sys.argv[3:])
     elif command == "r":
