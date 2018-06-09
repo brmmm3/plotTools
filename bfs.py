@@ -4,6 +4,8 @@ import os
 import sys
 import struct
 import time
+import glob
+import traceback
 from collections import deque
 from threading import Thread, Event
 
@@ -84,24 +86,37 @@ def readTOC(dev):
     with open(dev, "rb") as D:
         tocData = bytearray(D.read(1024))
     if not tocData.startswith(b"BFS0"):
-        print("ERROR: Device does not have a BFS table!")
-        sys.exit(1)
+        raise Exception("ERROR: Device does not have a BFS table!")
     toc = {}
     for i in range(31):
         pos = 4 + i * 32
         key, startNonce, nonces, stagger, info = struct.unpack("<QQIIQ", tocData[pos:pos + 32])
         if key != 0:
-            toc[info & 0xffffffffffff] = ( key, startNonce, nonces, stagger, info >> 48, f"{key}_{startNonce}_{nonces}_{stagger}" )
+            if stagger > 0:
+                fileName = f"{key}_{startNonce}_{nonces}_{stagger}"
+            else:
+                fileName = f"{key}_{startNonce}_{nonces}"
+            toc[info & 0xffffffffffff] = (key, startNonce, nonces, stagger, info >> 48, fileName)
     return tocData, toc
 
 
 def listPlotFiles(dev):
-    size = getDiskSize(dev) - 2 * SECTOR_SIZE
-    print(f"Contents of {dev} with size {int(size / GB + 0.5)} GB:")
-    for startPos, (key, startNonce, nonces, stagger, status, fileName) in sorted(readTOC(dev)[1].items()):
-        size -= nonces * NONCE_SIZE
-        print(f"{key}_{startNonce}_{nonces}_{stagger} with size {nonces // 4096}GB starts at sector {startPos >> 9}")
-    print(f"{int(size / GB + 0.5)} GB free space left.")
+    if "*" in dev or "?" in dev:
+        devices = glob.glob(dev)
+    else:
+        devices = (dev, )
+    for device in devices:
+        try:
+            size = getDiskSize(device) - 2 * SECTOR_SIZE
+            print(f"Contents of {device} with size {int(size / GB + 0.5)} GB:")
+            for startPos, (key, startNonce, nonces, stagger, status, fileName) in sorted(readTOC(device)[1].items()):
+                size -= nonces * NONCE_SIZE
+                print(
+                    f"{key}_{startNonce}_{nonces}_{stagger} with size {nonces // 4096}GB starts at sector {startPos >> 9}")
+            print(f"{int(size / GB + 0.5)} GB ({size // NONCE_SIZE} Nonces) free space left.")
+        except Exception as exc:
+            print(exc)
+            continue
 
 
 def writePlotFiles(dev, plotFiles):
@@ -131,19 +146,25 @@ def writePlotFiles(dev, plotFiles):
             try:
                 key, startNonce, nonces, stagger = [ int(x) for x in os.path.basename(plotFileName).split("_") ]
             except Exception as exc:
-                print(f"ERROR: Invalid source filename: {plotFile}:\n{exc}")
-                continue
+                try:
+                    key, startNonce, nonces = [int(x) for x in os.path.basename(plotFileName).split("_")]
+                    stagger = 0
+                except Exception as exc:
+                    print(f"ERROR: Invalid source filename: {plotFile}:\n{exc}")
+                    continue
             # Check if TOC is full
             if len(toc) >= 31:
-                print("ERROR: TOC is full!")
-                sys.exit(1)
+                raise Exception("ERROR: TOC is full!")
             bExists = False
-            for _, _, _, _, _, fileName in toc.values():
-                if plotFileName == fileName:
+            for tmpKey, tmpStartNonce, tmpNonces, tmpStagger, tmpStatus, fileName in toc.values():
+                if (tmpKey, tmpStartNonce, tmpNonces) == (key, startNonce, nonces):
+                    if tmpStagger == stagger:
+                        print(f"ERROR: File {fileName} already exists!")
+                    else:
+                        print(f"ERROR: File {fileName} already exists with different stagger size!")
                     bExists = True
                     break
             if bExists:
-                print(f"ERROR: File {fileName} already exists!")
                 continue
             # Search for free block with enough size
             plotSize = os.stat(plotFile).st_size
@@ -155,6 +176,7 @@ def writePlotFiles(dev, plotFiles):
                 continue
             print(f"Write file {plotFile} to {dev}...")
             # Copy file
+            t0 = time.time()
             D.seek(startPos)
             with open(plotFile, "rb") as F:
                 copyFile(F, D, plotSize)
@@ -171,6 +193,7 @@ def writePlotFiles(dev, plotFiles):
                     D.seek(0)
                     D.write(tocData)
                     break
+            print(f"Written after {int(time.time() - t0)} seconds.")
 
 
 def readPlotFiles(dev, plotFiles):
@@ -178,10 +201,12 @@ def readPlotFiles(dev, plotFiles):
         for plotFile in plotFiles:
             if plotFile.endswith(fileName):
                 print(f"Copy file {os.path.basename(plotFile)} from {dev} to {plotFile}...")
+                t0 = time.time()
                 with open(plotFile, "wb") as F:
                     with open(dev, "rb") as D:
                         D.seek(startPos)
                         copyFile(D, F, nonces * NONCE_SIZE)
+                print(f"Read after {int(time.time() - t0)} seconds.")
                 break
         else:
             print(f"ERROR: File {fileName} not found on device {dev}!")
