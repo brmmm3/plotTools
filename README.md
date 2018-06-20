@@ -58,18 +58,27 @@ The tools are written in Python 3.6 and should work on any platform.
 
 ## bfs: Manage BFS (Burst File System) on hard disks
     ###### Usage:
-     python3 bfs.py <Command> <Device> [plot files]
+     python3 bfs.py [<Command>] [<Device>] [plot files]
+     If command is omitted a usage information is shown.
     ###### Commands:
      i Initialize hard disk with BFS (write empty contents table into first 1024 bytes).
        python3 bfs.py i /dev/sdX
      w Write plot files to BFS
        python3 bfs.py w /dev/sdX plotfile1 plotfile2 ...
+     W Write plot files to BFS and convert to POC2 format
+       python3 bfs.py W /dev/sdX plotfile1 plotfile2 ...
      r Read plot files from BFS
        python3 bfs.py r /dev/sdX plotfile1 plotfile2 ...
-     l List BFS contents
+     l List BFS contents. If device is omitted all disk devices are scanned.
        python3 bfs.py l /dev/sdX
+     L List BFS contents and suppress errors. If device is omitted all disk devices are scanned.
+       python3 bfs.py L /dev/sdX
      d Delete plot files from BFS (just updates the contents table)
        python3 bfs.py d /dev/sdX plotfile1 plotfile2 ...
+     c Convert all plot files on BFS device to POC2 format. If device is omitted all BFS devices are converted.
+       python3 bfs.py c /dev/sdX
+     p Adjust access permissions of BFS devices. If device is omitted all BFS devices are adjusted.
+       python3 bfs.py p /dev/sdX
 
 #### Python 3.6
 If you are using Debian Stretch you will need python3.6.
