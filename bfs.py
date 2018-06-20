@@ -386,6 +386,7 @@ def adjustPermissions(dev):
 
 def usage():
     print("Usage:")
+    print("  i  Initialize disk with an empty BFS table.")
     print("  l  List plot files and show also read errors.")
     print("  L  List plot files and suppress errors.")
     print("  w  Write plot files from common file system to BFS disk.")
