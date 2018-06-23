@@ -60,6 +60,7 @@ The tools are written in Python 3.6 and should work on any platform.
     ###### Usage:
      python3 bfs.py [<Command>] [<Device>] [plot files]
      If command is omitted a usage information is shown.
+     The <Device> can be something like /dev/sdX, /dev/disk/by-id/<Disk-Id> or /dev/disk/by-uuid/<UUID>.
     ###### Commands:
      i Initialize hard disk with BFS (write empty contents table into first 1024 bytes).
        python3 bfs.py i /dev/sdX
@@ -76,7 +77,7 @@ The tools are written in Python 3.6 and should work on any platform.
      d Delete plot files from BFS (just updates the contents table)
        python3 bfs.py d /dev/sdX plotfile1 plotfile2 ...
      c Convert all plot files on BFS device to POC2 format. If device is omitted all BFS devices are converted.
-       python3 bfs.py c /dev/sdX
+       python3 bfs.py c /dev/sdX (UNTESTED!!!)
      p Adjust access permissions of BFS devices. If device is omitted all BFS devices are adjusted.
        python3 bfs.py p /dev/sdX
 
