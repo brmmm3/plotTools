@@ -229,14 +229,16 @@ def listPlotFiles(dev, dev2name, bVerbose):
                 size -= nonces * NONCE_SIZE
                 status = info & 3
                 if stagger > 0:
+                    pocVersion = "POC1"
                     fileName = f"{key}_{startNonce}_{nonces}_{stagger}"
                 else:
+                    pocVersion = "POC2"
                     fileName = f"{key}_{startNonce}_{nonces}"
                 if status == ST_INCOMPLETE:
                     fileName += ".plotting"
                 elif status == ST_CONVERTING:
                     fileName += f".converting ({info >> 2}/{SCOOPS_IN_NONCE >> 1})"
-                print(f"POC2 {fileName} with size {nonces // 4096}GB starts at sector {startPos >> 9}")
+                print(f"{pocVersion} {fileName} with size {nonces // 4096}GB starts at sector {startPos >> 9}")
             print(f"{int(size / GB + 0.5)} GB ({size // NONCE_SIZE} Nonces) free space left.")
         except Exception as exc:
             if bVerbose:
