@@ -209,9 +209,9 @@ def convertPlotFiles(dev):
                     print("Converting...")
                     with open(device, "rb+") as D:
                         shufflePoc1ToPoc2(D, startPos, D, startPos, nonces, pos, tocData)
-                    tocData[pos + 20:pos + 32] = struct.pack("<IQ", 0, (ST_OK << 48) | startPos)
-                    D.seek(0)
-                    D.write(tocData)
+                        tocData[pos + 20:pos + 32] = struct.pack("<IQ", 0, (ST_OK << 48) | startPos)
+                        D.seek(0)
+                        D.write(tocData)
                 else:
                     print(
                         f"POC2 {fileName} with size {nonces // 4096}GB starts at sector {startPos >> 9}")
