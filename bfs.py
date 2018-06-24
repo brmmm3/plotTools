@@ -5,13 +5,15 @@ import sys
 import struct
 import time
 import glob
+import zlib
 from collections import deque
 from threading import Thread, Event, Lock
 
 """
-Contents TOC:
+Contents TOC (BFS0):
+First 4 byte: BFS0
 A table of 31 slots for plot files.
-Each slot contains: key (64bit), startNonce (64bit), nonces(32bit), stagger(32bit), info(64bit)
+Each slot (32 byte) contains: key (64bit), startNonce (64bit), nonces(32bit), stagger(32bit), info(64bit)
 If stagger=0 -> POC2 file
 info: Lower 48 bits start position on disk in bytes
       Bit 48-50: 1=File is ready to use
@@ -19,11 +21,29 @@ info: Lower 48 bits start position on disk in bytes
                  3=Converting to POC2
       Bits 51-63: Last written scoop when converting
 
+Contents TOC (BFS1):
+Size is 4k (Original) + 4k (Backup).
+First 4 byte: BFS1
+A table of 32 slots for plot files.
+Each slot (36 byte) contains: key (64bit), startNonce (64bit), nonces(32bit), stagger(32bit), startPos(32bit), status(32bit), pos(32bit)
+If stagger=0 -> POC2 file
+startPos: 4k sector number where the plot file starts
+status:
+      1=File is ready to use
+      2=File is incomplete (writing or plotting)
+      3=Converting to POC2
+pos: Counter value used for plotting and converting.
+After TOC table of defect areas (888 byte):
+Each entry (8 byte) contains: startPos(32bit), size(32bit)
+startPos: 4k sector number where the defect area starts
+size: Size of defect area as 4k sector count
+Last 4 byte of 4k TOC is CRC(32bit) -> Algo is CRC32
+
 TODO:
     Also write last position when writing/plotting file (Granularity is 4096 positions) for resuming
 """
 
-VERSION = "1.0.0"
+VERSION = "2.0.0"
 
 SECTOR_SIZE = 512
 SHABAL256_HASH_SIZE = 32
@@ -31,6 +51,8 @@ SCOOP_SIZE = SHABAL256_HASH_SIZE * 2
 SCOOPS_IN_NONCE = 4096
 SCOOPS_IN_NONCE05 = 2048
 NONCE_SIZE = 262144
+
+DEFECT_MAX = 111
 
 MB = 1024 * 1024
 GB = 1024 * MB
@@ -122,34 +144,72 @@ def getDiskSize(dev):
 
 def initDevice(dev):
     print("Initialize device...")
+    tocData = bytearray(b"BFS1" + b"\0" * 4092)
+    tocData[4092:4096] = struct.pack("<I", zlib.crc32(tocData[:4092]))
     with open(dev, "wb") as D:
-        D.write(b"BFS0" + b"\0" * 1020)
+        D.write(tocData + tocData)
 
 
 def hasTOC(dev):
     try:
         with open(dev, "rb") as D:
-            return bytearray(D.read(1024)).startswith(b"BFS0")
+            return D.read(4) in (b"BFS0", b"BFS1")
     except OSError:
         return False
 
 
 def readTOC(dev):
     with open(dev, "rb") as D:
-        tocData = bytearray(D.read(1024))
-    if not tocData.startswith(b"BFS0"):
+        tocId = D.read(4)
+    if tocId not in (b"BFS0", b"BFS1"):
         raise Exception("ERROR: Device does not have a BFS table!")
     toc = {}
-    for i in range(31):
-        pos = 4 + i * 32
-        key, startNonce, nonces, stagger, info = struct.unpack("<QQIIQ", tocData[pos:pos + 32])
-        if key != 0:
-            if stagger > 0:
-                fileName = f"{key}_{startNonce}_{nonces}_{stagger}"
-            else:
-                fileName = f"{key}_{startNonce}_{nonces}"
-            toc[info & 0xffffffffffff] = (key, startNonce, nonces, stagger, info >> 48, fileName, pos)
-    return tocData, toc
+    defect = []
+    if tocId == b"BFS0":
+        with open(dev, "rb") as D:
+            tocData = bytearray(D.read(1024))
+        for i in range(31):
+            tocPos = 4 + i * 32
+            key, startNonce, nonces, stagger, info = struct.unpack("<QQIIQ", tocData[tocPos:tocPos + 32])
+            if key != 0:
+                if stagger > 0:
+                    fileName = f"{key}_{startNonce}_{nonces}_{stagger}"
+                else:
+                    fileName = f"{key}_{startNonce}_{nonces}"
+                toc[info & 0xffffffffffff] = (key, startNonce, nonces, stagger, info >> 48, fileName, 0, tocPos)
+    else:
+        with open(dev, "rb") as D:
+            tocData = bytearray(D.read(4096))
+            backupTocData = bytearray(D.read(4096))
+        if tocData[4092:4096] != struct.pack("<I", zlib.crc32(tocData[:4092])):
+            # Master TOC is invalid! Try to use Backup.
+            if backupTocData[4092:4096] != struct.pack("<I", zlib.crc32(backupTocData[:4092])):
+                raise Exception("ERROR: Device does not have a valid TOC!")
+            tocData = backupTocData
+        # Read TOC
+        for i in range(32):
+            tocPos = 4 + i * 36
+            key, startNonce, nonces, stagger, startPos, status, pos = struct.unpack("<QQIIIII", tocData[tocPos:tocPos + 32])
+            if key != 0:
+                if stagger > 0:
+                    fileName = f"{key}_{startNonce}_{nonces}_{stagger}"
+                else:
+                    fileName = f"{key}_{startNonce}_{nonces}"
+                toc[startPos] = (key, startNonce, nonces, stagger, startPos, fileName, pos, tocPos)
+        # Read DEFECT table
+        for i in range(DEFECT_MAX):
+            tocPos = 1156 + i * 8
+            startPos, size = struct.unpack("<II", tocData[tocPos:tocPos + 32])
+            if (startPos > 0) and (size > 0):
+                defect.append((startPos, size))
+    return tocData, toc, defect
+
+
+def writeTOC(dev, tocData):
+    tocData[4092:4096] = struct.pack("<I", zlib.crc32(tocData[:4092]))
+    with open(dev, "wb") as D:
+        D.write(tocData) # Write Master TOC
+        D.write(tocData) # Write Backup TOC
 
 
 def shufflePoc1ToPoc2(S, sStartPos, D, dStartPos, nonces, tocPos=0, tocData=None):
@@ -197,7 +257,7 @@ def convertPlotFiles(dev):
     for device in getDevices(dev):
         try:
             size = getDiskSize(device) - 2 * SECTOR_SIZE
-            tocData, toc = readTOC(device)
+            tocData, toc, defect = readTOC(device)
         except:
             continue
         try:
@@ -223,11 +283,10 @@ def listPlotFiles(dev, dev2name, bVerbose):
     for device in getDevices(dev):
         try:
             size = getDiskSize(device) - 2 * SECTOR_SIZE
-            _, toc = readTOC(device)
+            tocData, toc, defect = readTOC(device)
             print(f"Contents of {device} ({dev2name.get(device)}) with size {int(size / GB + 0.5)} GB:")
-            for startPos, (key, startNonce, nonces, stagger, info, fileName, _) in sorted(toc.items()):
+            for startPos, (key, startNonce, nonces, stagger, status, fileName, pos, _) in sorted(toc.items()):
                 size -= nonces * NONCE_SIZE
-                status = info & 3
                 if stagger > 0:
                     pocVersion = "POC1"
                     fileName = f"{key}_{startNonce}_{nonces}_{stagger}"
@@ -235,10 +294,18 @@ def listPlotFiles(dev, dev2name, bVerbose):
                     pocVersion = "POC2"
                     fileName = f"{key}_{startNonce}_{nonces}"
                 if status == ST_INCOMPLETE:
-                    fileName += ".plotting"
+                    fileName += f".plotting ({pos})"
                 elif status == ST_CONVERTING:
-                    fileName += f".converting ({info >> 2}/{SCOOPS_IN_NONCE >> 1})"
-                print(f"{pocVersion} {fileName} with size {nonces // 4096}GB starts at sector {startPos >> 9}")
+                    fileName += f".converting ({pos})"
+                if tocData.startswith(b"BFS0"):
+                    print(f"{pocVersion} {fileName} with size {nonces // 4096}GB starts at 512 byte sector {startPos >> 9}")
+                else:
+                    print(f"{pocVersion} {fileName} with size {nonces // 4096}GB starts at 4k sector {startPos}")
+            if defect:
+                print(f"Device has {len(defect)} defect areas!")
+                if bVerbose:
+                    for startPos, size in defect:
+                        print(f"Defect (4k sectors) {startPos} - {startPos + size - 1}")
             print(f"{int(size / GB + 0.5)} GB ({size // NONCE_SIZE} Nonces) free space left.")
         except Exception as exc:
             if bVerbose:
@@ -247,10 +314,13 @@ def listPlotFiles(dev, dev2name, bVerbose):
 
 def writePlotFiles(dev, plotFiles, bPOC2):
     size = getDiskSize(dev) - 2 * SECTOR_SIZE
-    tocData, toc = readTOC(dev)
+    tocData, toc, defect = readTOC(dev)
+    bBFS0 = tocData.startswith(b"BFS0")
+    tocMaxSize = 31 if bBFS0 else 32
+    tocEntrySize = 32 if bBFS0 else 36
     # Compute free blocks
     usedBlocks = {}
-    for startPos, (_, _, nonces, _, _, _, _) in toc.items():
+    for startPos, (_, _, nonces, _, _, _, _, _) in toc.items():
         usedBlocks[startPos] = nonces * NONCE_SIZE
     freeBlocks = {}
     if usedBlocks:
@@ -280,10 +350,10 @@ def writePlotFiles(dev, plotFiles, bPOC2):
                     print(f"ERROR: Invalid source filename: {plotFile}:\n{exc}")
                     continue
             # Check if TOC is full
-            if len(toc) >= 31:
+            if len(toc) >= tocMaxSize:
                 raise Exception("ERROR: TOC is full!")
             bExists = False
-            for tmpKey, tmpStartNonce, tmpNonces, tmpStagger, _, fileName, _ in toc.values():
+            for tmpKey, tmpStartNonce, tmpNonces, tmpStagger, _, fileName, _, _ in toc.values():
                 if (tmpKey, tmpStartNonce, tmpNonces) == (key, startNonce, nonces):
                     if tmpStagger == stagger:
                         print(f"ERROR: File {fileName} already exists!")
@@ -303,21 +373,31 @@ def writePlotFiles(dev, plotFiles, bPOC2):
                 continue
             print(f"Write file {plotFile} to {dev}...")
             # Find free slot in TOC
-            pos = 0
-            for i in range(31):
-                pos = 4 + i * 32
-                if struct.unpack("<QQIIQ", tocData[pos:pos + 32])[0] == 0:
+            tocPos = 0
+            for i in range(tocMaxSize):
+                pos = 4 + i * tocEntrySize
+                if struct.unpack("<Q", tocData[pos:pos + 8])[0] == 0:
                     info = (ST_INCOMPLETE << 48) | startPos
                     if bPOC2 or (stagger == 0):
                         toc[startPos] = (key, startNonce, nonces, stagger, ST_INCOMPLETE,
-                                         f"{key}_{startNonce}_{nonces}", pos)
-                        tocData[pos:pos + 32] = struct.pack("<QQIIQ", key, startNonce, nonces, 0, info)
+                                         f"{key}_{startNonce}_{nonces}", 0, tocPos)
+                        if bBFS0:
+                            tocData[tocPos:tocPos + 32] = struct.pack("<QQIIQ", key, startNonce, nonces, 0, info)
+                        else:
+                            tocData[tocPos:tocPos + 36] = struct.pack("<QQIIIII", key, startNonce, nonces, 0,
+                                                                      startPos, ST_INCOMPLETE, 0)
                     else:
                         toc[startPos] = (key, startNonce, nonces, stagger, ST_INCOMPLETE,
-                                         f"{key}_{startNonce}_{nonces}_{stagger}", pos)
-                        tocData[pos:pos + 32] = struct.pack("<QQIIQ", key, startNonce, nonces, stagger, info)
+                                         f"{key}_{startNonce}_{nonces}_{stagger}", 0, tocPos)
+                        if bBFS0:
+                            tocData[tocPos:tocPos + 32] = struct.pack("<QQIIQ", key, startNonce, nonces, stagger, info)
+                        else:
+                            tocData[tocPos:tocPos + 36] = struct.pack("<QQIIIII", key, startNonce, nonces, stagger,
+                                                                      startPos, ST_INCOMPLETE, 0)
                     D.seek(0)
                     D.write(tocData)
+                    if not bBFS0:
+                        D.write(tocData)
                     break
             # Copy file
             t0 = time.time()
@@ -334,25 +414,39 @@ def writePlotFiles(dev, plotFiles, bPOC2):
             # Add file to TOC
             info = (ST_OK << 48) | startPos
             if bPOC2 or (stagger == 0):
-                toc[startPos] = (key, startNonce, nonces, stagger, ST_OK, f"{key}_{startNonce}_{nonces}", pos)
-                tocData[pos:pos + 32] = struct.pack("<QQIIQ", key, startNonce, nonces, 0, info)
+                toc[startPos] = (key, startNonce, nonces, stagger, ST_OK, f"{key}_{startNonce}_{nonces}", 0, tocPos)
+                if bBFS0:
+                    tocData[tocPos:tocPos + 32] = struct.pack("<QQIIQ", key, startNonce, nonces, 0, info)
+                else:
+                    tocData[tocPos:tocPos + 36] = struct.pack("<QQIIIII", key, startNonce, nonces, 0,
+                                                              startPos, ST_OK, 0)
             else:
-                toc[startPos] = (key, startNonce, nonces, stagger, ST_OK, f"{key}_{startNonce}_{nonces}_{stagger}", pos)
-                tocData[pos:pos + 32] = struct.pack("<QQIIQ", key, startNonce, nonces, stagger, info)
+                toc[startPos] = (key, startNonce, nonces, stagger, ST_OK, f"{key}_{startNonce}_{nonces}_{stagger}", 0, tocPos)
+                if bBFS0:
+                    tocData[tocPos:tocPos + 32] = struct.pack("<QQIIQ", key, startNonce, nonces, stagger, info)
+                else:
+                    tocData[tocPos:tocPos + 36] = struct.pack("<QQIIIII", key, startNonce, nonces, stagger,
+                                                              startPos, ST_OK, 0)
             D.seek(0)
             D.write(tocData)
+            if not bBFS0:
+                D.write(tocData)
             print(f"Written after {int(time.time() - t0)} seconds.")
 
 
 def readPlotFiles(dev, plotFiles):
-    for startPos, (_, _, nonces, _, _, fileName, _) in sorted(readTOC(dev)[1].items()):
+    tocData, toc, _ = readTOC(dev)
+    for startPos, (_, _, nonces, _, _, fileName, _, _) in sorted(toc.items()):
         for plotFile in plotFiles:
             if plotFile.endswith(fileName):
                 print(f"Copy file {os.path.basename(plotFile)} from {dev} to {plotFile}...")
                 t0 = time.time()
                 with open(plotFile, "wb") as F:
                     with open(dev, "rb") as D:
-                        D.seek(startPos)
+                        if tocData.startswith(b"BFS0"):
+                            D.seek(startPos)
+                        else:
+                            D.seek(startPos * 4096)
                         copyFile(D, F, nonces * NONCE_SIZE)
                 print(f"Read after {int(time.time() - t0)} seconds.")
                 break
@@ -361,22 +455,50 @@ def readPlotFiles(dev, plotFiles):
 
 
 def deletePlotFiles(dev, plotFiles):
-    toc = readTOC(dev)[1]
+    tocData, toc, _ = readTOC(dev)
     for plotFile in plotFiles:
         plotFileName = os.path.basename(plotFile)
-        for startPos, (key, startNonce, nonces, stagger, status, fileName, _) in list(toc.items()):
+        for startPos, (_, _, _, _, _, fileName, _, tocPos) in list(toc.items()):
             if fileName == plotFileName:
                 del toc[startPos]
+                tocData[tocPos:tocPos + 8] = b"\0" * 8
                 break
         else:
             print(f"ERROR: File {plotFileName} not found on device {dev}!")
-    newData = bytearray(b"BFS0" + b"\0" * 1020)
-    for i, startPos, (key, startNonce, nonces, stagger, status, fileName) in enumerate(sorted(toc.items())):
-        pos = 4 * i * 32
-        newData[pos:pos + 32] = struct.pack("<QQIIQ", key, startNonce, nonces, stagger, (status << 48) | startPos)
-    # Write TOC
-    with open(dev, "wb") as D:
-        D.write(newData)
+    writeTOC(dev, tocData)
+
+
+def addDefect(dev, startPos, size):
+    if (startPos < 2) or (size < 1):
+        raise Exception("ERROR: Invalid parameter!")
+    tocData, toc, defect = readTOC(dev)
+    if len(defect) >= DEFECT_MAX:
+        raise Exception("ERROR: Defect table is full!")
+    for i, (defectStartPos, defectSize) in enumerate(defect):
+        if (startPos >= defectStartPos) and (startPos <= defectStartPos + defectSize):
+            newStartPos = min(startPos, defectStartPos)
+            newSize = max(startPos + size, defectStartPos + defectSize) - newStartPos
+            tocPos = 1156 + i * 8
+            tocData[tocPos:tocPos + 8] = struct.pack("<II", newStartPos, newSize)
+            print("Existing defect area extended.")
+            break
+    else:
+        defect.append((startPos, size))
+        print("New defect area added.")
+    writeTOC(dev, tocData)
+
+
+def removeDefect(dev, startPos):
+    tocData, toc, defect = readTOC(dev)
+    for i, (defectStartPos, _) in enumerate(defect):
+        if startPos == defectStartPos:
+            tocPos = 1156 + i * 8
+            tocData[tocPos:tocPos + 8] = b"\0" * 8
+            writeTOC(dev, tocData)
+            print("Defect area removed.")
+            break
+    else:
+        print("ERROR: Defect area not found!")
 
 
 def adjustPermissions(dev):
@@ -435,6 +557,10 @@ if __name__ == "__main__":
         deletePlotFiles(dev, sys.argv[3:])
     elif command == "c":
         convertPlotFiles(dev)
+    elif command == "+D":
+        addDefect(dev, sys.argv[3], sys.argv[4])
+    elif command == "-D":
+        removeDefect(dev, sys.argv[3])
     elif command == "p":
         adjustPermissions(dev)
     print(f"Finished after {int(time.time() - t0)} seconds.")
